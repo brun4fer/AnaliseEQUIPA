@@ -17,6 +17,44 @@ model User {
   updatedAt    DateTime @updatedAt
 }
 
+model Season {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  startDate DateTime?
+  endDate   DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  competitions Competition[]
+  matches      Match[]
+}
+
+model Club {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  shortName String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  competitions   Competition[]
+  opponentMatches Match[] @relation("OpponentClub")
+}
+
+model Competition {
+  id        String   @id @default(cuid())
+  name      String
+  seasonId  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  season Season @relation(fields: [seasonId], references: [id], onDelete: Restrict)
+  clubs   Club[]
+  matches Match[]
+
+  @@index([seasonId])
+  @@unique([seasonId, name])
+}
+
 model Match {
   id                         String   @id @default(cuid())
   title                      String
@@ -33,11 +71,21 @@ model Match {
   secondHalfEndSeconds       Float?
   firstHalfAttackDirection   String   @default("left_to_right")
   secondHalfAttackDirection  String   @default("right_to_left")
+  seasonId                   String?
+  opponentClubId             String?
+  competitionId              String?
   createdAt                  DateTime @default(now())
   updatedAt                  DateTime @updatedAt
 
-  video   Video?
-  moments Moment[]
+  video             Video?
+  moments           Moment[]
+  seasonRecord      Season?      @relation(fields: [seasonId], references: [id], onDelete: SetNull)
+  opponentClub      Club?        @relation("OpponentClub", fields: [opponentClubId], references: [id], onDelete: SetNull)
+  competitionRecord Competition? @relation(fields: [competitionId], references: [id], onDelete: SetNull)
+
+  @@index([seasonId])
+  @@index([opponentClubId])
+  @@index([competitionId])
 }
 
 model Video {

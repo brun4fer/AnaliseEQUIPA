@@ -67,6 +67,9 @@ export type MatchSummary = {
   season: string | null;
   roundName: string | null;
   matchDate: string | null;
+  seasonId?: string | null;
+  opponentClubId?: string | null;
+  competitionId?: string | null;
   momentCount: number;
 };
 
@@ -88,6 +91,18 @@ export type SettingsPayload = {
   subMomentTypes: SubMomentTypeRecord[];
 };
 
+export type MaintenanceRecord = {
+  id: string;
+  name: string;
+  shortName?: string | null;
+  startDate?: string | null;
+  endDate?: string | null;
+  seasonId?: string | null;
+  clubIds?: string[];
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type MapPoint = {
   id: string;
   matchId: string;
@@ -103,4 +118,6 @@ export type MapPoint = {
   goalX: number | null;
   goalY: number | null;
   outcome: string | null;
+  period: "first_half" | "second_half" | null;
+  attackDirection: "left_to_right" | "right_to_left" | null;
 };

@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { getAttackDirectionAtTime, getMatchPeriodAtTime } from "@/lib/match-periods";
 
 const matchInclude = {
   video: true,
@@ -46,15 +47,26 @@ export async function getMatch(matchId: string) {
 }
 
 export async function createMatch(input: Record<string, unknown>) {
-  const opponentName = String(input.opponentName || "").trim();
-  if (!opponentName) throw new Error("Opponent is required.");
-  const title = String(input.title || `Feirense vs ${opponentName}`).trim();
+  const seasonId = String(input.seasonId || "");
+  const competitionId = String(input.competitionId || "");
+  const opponentClubId = String(input.opponentClubId || "");
+  if (!seasonId || !competitionId || !opponentClubId) throw new Error("Season, competition and opponent are required.");
+  const competitionRecord = await prisma.competition.findUnique({
+    where: { id: competitionId },
+    include: { season: true, clubs: { where: { id: opponentClubId }, select: { id: true, name: true } } }
+  });
+  if (!competitionRecord || competitionRecord.seasonId !== seasonId || competitionRecord.clubs.length !== 1) throw new Error("The selected opponent does not participate in this competition.");
+  const opponent = competitionRecord.clubs[0];
+  const title = String(input.title || `Feirense vs ${opponent.name}`).trim();
   const match = await prisma.match.create({
     data: {
       title,
-      opponentName,
-      competition: optionalString(input.competition),
-      season: optionalString(input.season),
+      opponentName: opponent.name,
+      competition: competitionRecord.name,
+      season: competitionRecord.season.name,
+      seasonId,
+      competitionId,
+      opponentClubId,
       roundName: optionalString(input.roundName),
       venue: optionalString(input.venue),
       notes: optionalString(input.notes),
@@ -63,6 +75,37 @@ export async function createMatch(input: Record<string, unknown>) {
       secondHalfAttackDirection: String(input.secondHalfAttackDirection || "right_to_left")
     },
     include: matchInclude
+  });
+  return serializeMatch(match as never);
+}
+
+export async function updateMatch(matchId: string, input: Record<string, unknown>) {
+  const markerKeys = [
+    "firstHalfStartSeconds",
+    "firstHalfEndSeconds",
+    "secondHalfStartSeconds",
+    "secondHalfEndSeconds"
+  ] as const;
+  const data: Partial<Record<(typeof markerKeys)[number], number | null>> = {};
+
+  for (const key of markerKeys) {
+    if (input[key] !== undefined) data[key] = optionalNumber(input[key]);
+  }
+
+  const current = await prisma.match.findUniqueOrThrow({ where: { id: matchId } });
+  const nextMarkers = Object.fromEntries(markerKeys.map((key) => [key, data[key] === undefined ? current[key] : data[key]])) as Record<PeriodMarkerKey, number | null>;
+  validatePeriodMarkers(nextMarkers);
+
+  const match = await prisma.$transaction(async (tx) => {
+    await tx.match.update({ where: { id: matchId }, data });
+    await tx.moment.updateMany({ where: { matchId }, data: { period: null } });
+    if (nextMarkers.firstHalfStartSeconds !== null && nextMarkers.firstHalfEndSeconds !== null) {
+      await tx.moment.updateMany({ where: { matchId, startTimeSeconds: { gte: nextMarkers.firstHalfStartSeconds, lte: nextMarkers.firstHalfEndSeconds } }, data: { period: "first_half" } });
+    }
+    if (nextMarkers.secondHalfStartSeconds !== null && nextMarkers.secondHalfEndSeconds !== null) {
+      await tx.moment.updateMany({ where: { matchId, startTimeSeconds: { gte: nextMarkers.secondHalfStartSeconds, lte: nextMarkers.secondHalfEndSeconds } }, data: { period: "second_half" } });
+    }
+    return tx.match.findUniqueOrThrow({ where: { id: matchId }, include: matchInclude });
   });
   return serializeMatch(match as never);
 }
@@ -101,6 +144,7 @@ export async function createMoment(matchId: string, input: Record<string, unknow
   const start = Number(input.startTimeSeconds);
   const end = Number(input.endTimeSeconds);
   if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) throw new Error("Invalid moment interval.");
+  const match = await prisma.match.findUniqueOrThrow({ where: { id: matchId } });
   return prisma.moment.create({
     data: {
       matchId,
@@ -108,7 +152,7 @@ export async function createMoment(matchId: string, input: Record<string, unknow
       startTimeSeconds: start,
       endTimeSeconds: end,
       durationSeconds: end - start,
-      period: optionalString(input.period),
+      period: getMatchPeriodAtTime(match, start),
       notes: optionalString(input.notes),
       outcome: optionalString(input.outcome)
     },
@@ -117,7 +161,7 @@ export async function createMoment(matchId: string, input: Record<string, unknow
 }
 
 export async function updateMoment(momentId: string, input: Record<string, unknown>) {
-  const current = await prisma.moment.findUniqueOrThrow({ where: { id: momentId } });
+  const current = await prisma.moment.findUniqueOrThrow({ where: { id: momentId }, include: { match: true } });
   const start = input.startTimeSeconds === undefined ? current.startTimeSeconds : Number(input.startTimeSeconds);
   const end = input.endTimeSeconds === undefined ? current.endTimeSeconds : Number(input.endTimeSeconds);
   if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) throw new Error("Invalid moment interval.");
@@ -128,7 +172,7 @@ export async function updateMoment(momentId: string, input: Record<string, unkno
       startTimeSeconds: start,
       endTimeSeconds: end,
       durationSeconds: end - start,
-      period: input.period === undefined ? undefined : optionalString(input.period),
+      period: getMatchPeriodAtTime(current.match, start),
       notes: input.notes === undefined ? undefined : optionalString(input.notes),
       outcome: input.outcome === undefined ? undefined : optionalString(input.outcome)
     },
@@ -187,7 +231,10 @@ export async function getMapPoints() {
     },
     orderBy: { createdAt: "asc" }
   });
-  return rows.map((point) => ({
+  return rows.map((point) => {
+    const eventTime = point.timeSeconds ?? point.moment.startTimeSeconds;
+    const period = getMatchPeriodAtTime(point.moment.match, eventTime);
+    return {
     id: point.id,
     matchId: point.moment.matchId,
     matchTitle: point.moment.match.title,
@@ -201,8 +248,11 @@ export async function getMapPoints() {
     fieldY: point.fieldY,
     goalX: point.goalX,
     goalY: point.goalY,
-    outcome: point.outcome
-  }));
+      outcome: point.outcome,
+      period,
+      attackDirection: getAttackDirectionAtTime(point.moment.match, eventTime)
+    };
+  });
 }
 
 export async function saveMomentType(input: Record<string, unknown>, id?: string) {
@@ -251,4 +301,24 @@ function optionalCoordinate(value: unknown) {
   if (number === null) return null;
   if (number < 0 || number > 100) throw new Error("Coordinates must be between 0 and 100.");
   return number;
+}
+
+type PeriodMarkerKey = "firstHalfStartSeconds" | "firstHalfEndSeconds" | "secondHalfStartSeconds" | "secondHalfEndSeconds";
+
+function validatePeriodMarkers(markers: Record<PeriodMarkerKey, number | null>) {
+  const ordered = [
+    [markers.firstHalfStartSeconds, "Start 1st half"],
+    [markers.firstHalfEndSeconds, "End 1st half"],
+    [markers.secondHalfStartSeconds, "Start 2nd half"],
+    [markers.secondHalfEndSeconds, "End 2nd half"]
+  ] as const;
+  for (const [seconds, label] of ordered) {
+    if (seconds !== null && seconds < 0) throw new Error(`${label} cannot be negative.`);
+  }
+  let previous: number | null = null;
+  for (const [seconds] of ordered) {
+    if (seconds === null) continue;
+    if (previous !== null && seconds < previous) throw new Error("Match period markers must be saved in chronological order.");
+    previous = seconds;
+  }
 }
