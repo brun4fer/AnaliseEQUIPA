@@ -1,0 +1,11 @@
+{
+  "name": "Feirense — Análise da Equipa",
+  "short_name": "Análise Equipa",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#04100c",
+  "theme_color": "#0b281d",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

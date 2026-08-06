@@ -1,0 +1,106 @@
+export type MomentTypeRecord = {
+  id: string;
+  name: string;
+  code: string;
+  color: string;
+  defaultShortcut: string | null;
+  sortOrder: number;
+  active: boolean;
+  allowedSubmoments?: SubMomentTypeRecord[];
+};
+
+export type SubMomentTypeRecord = {
+  id: string;
+  name: string;
+  code: string;
+  color: string;
+  requiresFieldLocation: boolean;
+  requiresGoalLocation: boolean;
+  defaultShortcut: string | null;
+  sortOrder: number;
+  active: boolean;
+};
+
+export type SubMomentRecord = {
+  id: string;
+  momentId: string;
+  subMomentTypeId: string;
+  timeSeconds: number | null;
+  fieldX: number | null;
+  fieldY: number | null;
+  goalX: number | null;
+  goalY: number | null;
+  foot: string | null;
+  notes: string | null;
+  outcome: string | null;
+  subMomentType: SubMomentTypeRecord;
+};
+
+export type MomentRecord = {
+  id: string;
+  matchId: string;
+  momentTypeId: string;
+  startTimeSeconds: number;
+  endTimeSeconds: number;
+  durationSeconds: number;
+  period: string | null;
+  notes: string | null;
+  outcome: string | null;
+  momentType: MomentTypeRecord;
+  subMoments: SubMomentRecord[];
+};
+
+export type VideoRecord = {
+  id: string;
+  matchId: string;
+  fileName: string;
+  fileSize: number;
+  durationSeconds: number;
+  mimeType: string;
+};
+
+export type MatchSummary = {
+  id: string;
+  title: string;
+  opponentName: string;
+  competition: string | null;
+  season: string | null;
+  roundName: string | null;
+  matchDate: string | null;
+  momentCount: number;
+};
+
+export type MatchDetail = MatchSummary & {
+  venue: string | null;
+  notes: string | null;
+  firstHalfStartSeconds: number | null;
+  firstHalfEndSeconds: number | null;
+  secondHalfStartSeconds: number | null;
+  secondHalfEndSeconds: number | null;
+  firstHalfAttackDirection: string;
+  secondHalfAttackDirection: string;
+  video: VideoRecord | null;
+  moments: MomentRecord[];
+};
+
+export type SettingsPayload = {
+  momentTypes: MomentTypeRecord[];
+  subMomentTypes: SubMomentTypeRecord[];
+};
+
+export type MapPoint = {
+  id: string;
+  matchId: string;
+  matchTitle: string;
+  momentId: string;
+  momentTypeName: string;
+  subMomentTypeId: string;
+  subMomentTypeName: string;
+  color: string;
+  timeSeconds: number | null;
+  fieldX: number | null;
+  fieldY: number | null;
+  goalX: number | null;
+  goalY: number | null;
+  outcome: string | null;
+};
