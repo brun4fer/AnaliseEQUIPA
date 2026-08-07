@@ -15,8 +15,7 @@ const config: Config = {
         panel: "0 18px 60px rgba(0,0,0,.34)",
         glow: "0 0 0 1px rgba(34,211,238,.25), 0 18px 70px rgba(34,211,238,.12)"
       },
-      fontFamily: { sans: ["Inter", "ui-sans-serif", "system-ui", "sans-serif"] },
-      screens: { xl: "64rem" }
+      fontFamily: { sans: ["Inter", "ui-sans-serif", "system-ui", "sans-serif"] }
     }
   },
   plugins: []
