@@ -21,7 +21,7 @@ Source videos remain on the user's computer. Neon stores only match metadata, ti
 - Configure `DATABASE_URL`, `AUTH_SECRET`, `INITIAL_ADMIN_NAME`, `INITIAL_ADMIN_EMAIL`, and `INITIAL_ADMIN_PASSWORD` in Vercel.
 - Apply Prisma migrations to Neon before releasing a build.
 - Use a public HTTPS production domain so Chrome can offer direct folder export.
-- Keep Vercel Deployment Protection disabled for the production address; the application has its own login.
+- Assign a production domain and keep Vercel Standard Protection for generated deployment URLs if desired; the public production domain is protected by the application's own login.
 - Download a metadata backup from Maintenance before structural database changes.
 
 ## Quality checks
