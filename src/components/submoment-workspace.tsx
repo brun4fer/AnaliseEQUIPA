@@ -2,13 +2,13 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, ChevronLeft, ChevronRight, Crosshair, FileVideo, Goal, Loader2, MapPin, Pause, Play, Save, Trash2, Upload } from "lucide-react";
+import { ArrowLeft, ChevronLeft, ChevronRight, Crosshair, FileVideo, Goal, Loader2, MapPin, Pause, Pencil, Play, Save, Trash2, Upload, X } from "lucide-react";
 
 import { Coordinate, GoalSurface, PitchSurface } from "@/components/analysis-surfaces";
 import { Badge, Button, Label, Panel, Select, TextArea } from "@/components/ui";
 import type { MatchDetail, MomentRecord, SettingsPayload, SubMomentRecord } from "@/lib/domain";
 import { apiFetch } from "@/lib/http";
-import { getRememberedMatchVideo, rememberMatchVideo } from "@/lib/local-video-store";
+import { getRememberedMatchVideo, rememberMatchVideo, videoPersistsAfterRestart } from "@/lib/local-video-store";
 import { getAttackDirectionAtTime, getMatchPeriodAtTime, matchPeriodLabel } from "@/lib/match-periods";
 import { formatBytes, formatTime, roundTime } from "@/lib/time";
 
@@ -31,6 +31,7 @@ export function SubmomentWorkspace({ matchId }: { matchId: string }) {
   const [foot, setFoot] = useState("");
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
+  const [editingSubmomentId, setEditingSubmomentId] = useState<string | null>(null);
 
   useEffect(() => {
     Promise.all([apiFetch<MatchDetail>(`/api/matches/${matchId}`), apiFetch<SettingsPayload>("/api/settings")])
@@ -73,6 +74,7 @@ export function SubmomentWorkspace({ matchId }: { matchId: string }) {
     if (sourceUrl) URL.revokeObjectURL(sourceUrl);
     setSourceUrl(URL.createObjectURL(file));
     void rememberMatchVideo(matchId, file).catch(() => setNotice("The video opened, but it will not remain available after this tab is closed."));
+    if (!videoPersistsAfterRestart(file)) setNotice("This large video is available during this browser session. Select it again after closing or fully refreshing the app.");
     if (match?.video && file.name !== match.video.fileName) setNotice(`You selected “${file.name}”, but this match expects “${match.video.fileName}”. Confirm that this is the correct file.`);
     else setNotice(null);
   }
@@ -125,6 +127,26 @@ export function SubmomentWorkspace({ matchId }: { matchId: string }) {
     setFieldPoint(null);
     setGoalPoint(null);
     videoRef.current?.pause();
+    setEditingSubmomentId(null);
+  }
+
+  function editSubmoment(submoment: SubMomentRecord) {
+    setEditingSubmomentId(submoment.id);
+    setSelectedSubMomentTypeId(submoment.subMomentTypeId);
+    setFieldPoint(submoment.fieldX !== null && submoment.fieldY !== null ? { x: submoment.fieldX, y: submoment.fieldY } : null);
+    setGoalPoint(submoment.goalX !== null && submoment.goalY !== null ? { x: submoment.goalX, y: submoment.goalY } : null);
+    setFoot(submoment.foot || "");
+    setNotes(submoment.notes || "");
+    if (submoment.timeSeconds !== null) {
+      setCurrentTime(submoment.timeSeconds);
+      if (videoRef.current) videoRef.current.currentTime = submoment.timeSeconds;
+    }
+    videoRef.current?.pause();
+  }
+
+  function cancelSubmomentEdit() {
+    setEditingSubmomentId(null);
+    setFieldPoint(null); setGoalPoint(null); setFoot(""); setNotes("");
   }
 
   async function saveSubmoment() {
@@ -142,8 +164,8 @@ export function SubmomentWorkspace({ matchId }: { matchId: string }) {
     setNotice(null);
     try {
       const eventTime = Math.min(selectedMoment.endTimeSeconds, Math.max(selectedMoment.startTimeSeconds, currentTime));
-      const saved = await apiFetch<SubMomentRecord>(`/api/moments/${selectedMoment.id}/submoments`, {
-        method: "POST",
+      const saved = await apiFetch<SubMomentRecord>(editingSubmomentId ? `/api/submoments/${editingSubmomentId}` : `/api/moments/${selectedMoment.id}/submoments`, {
+        method: editingSubmomentId ? "PATCH" : "POST",
         body: JSON.stringify({
           subMomentTypeId: selectedSubMomentType.id,
           timeSeconds: roundTime(eventTime),
@@ -155,12 +177,13 @@ export function SubmomentWorkspace({ matchId }: { matchId: string }) {
           notes: notes || null
         })
       });
-      setMatch({ ...match, moments: match.moments.map((moment) => moment.id === selectedMoment.id ? { ...moment, subMoments: [...moment.subMoments, saved] } : moment) });
+      setMatch({ ...match, moments: match.moments.map((moment) => moment.id === selectedMoment.id ? { ...moment, subMoments: editingSubmomentId ? moment.subMoments.map((item) => item.id === saved.id ? saved : item) : [...moment.subMoments, saved] } : moment) });
+      setEditingSubmomentId(null);
       setFieldPoint(null);
       setGoalPoint(null);
       setFoot("");
       setNotes("");
-      setNotice(`${selectedSubMomentType.name} saved at ${formatTime(eventTime)}.`);
+      setNotice(`${selectedSubMomentType.name} ${editingSubmomentId ? "updated" : "saved"} at ${formatTime(eventTime)}.`);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Could not save the submoment.");
     } finally {
@@ -200,7 +223,7 @@ export function SubmomentWorkspace({ matchId }: { matchId: string }) {
 
       <Panel className="p-4 xl:sticky xl:top-24"><div className="flex items-center justify-between"><div><Label>Tag submoment</Label><p className="mt-1 text-xs text-slate-500">{selectedMoment ? `${selectedMoment.momentType.name} · ${formatTime(currentTime)}` : "Select a moment"}</p></div><Crosshair className="text-leaf-400" size={19} /></div><div className="mt-3 grid grid-cols-2 gap-2">{settings.subMomentTypes.filter((type) => type.active).map((type) => <button key={type.id} type="button" onClick={() => chooseSubMomentType(type.id)} className={`min-h-10 rounded-lg border px-2 py-2 text-xs font-semibold transition ${selectedSubMomentTypeId === type.id ? "text-white shadow-lg" : "border-white/10 bg-white/[.04] text-slate-400 hover:bg-white/[.08]"}`} style={selectedSubMomentTypeId === type.id ? { backgroundColor: `${type.color}35`, borderColor: type.color } : undefined}><span className="mr-2 inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: type.color }} />{type.name}</button>)}</div>
 
-        {selectedMoment && selectedSubMomentType ? <div className="mt-4 space-y-4 border-t border-white/10 pt-4">{selectedSubMomentType.requiresFieldLocation ? <div><div className="mb-2 flex items-center justify-between"><Label>Occurrence location</Label><MapPin size={14} className="text-slate-500" /></div><PitchSurface value={fieldPoint} color={selectedSubMomentType.color} direction={attackDirection} directionLabel={directionLabel} onChange={setFieldPoint} /></div> : null}{selectedSubMomentType.requiresGoalLocation ? <div><div className="mb-2 flex items-center justify-between"><Label>Goal location</Label><Goal size={14} className="text-slate-500" /></div><GoalSurface points={goalMarkers} value={goalPoint} color={selectedSubMomentType.color} onChange={setGoalPoint} /></div> : null}<label className="grid gap-2"><Label>Body part</Label><Select value={foot} onChange={(event) => setFoot(event.target.value)}><option value="">Not specified</option><option value="right">Right foot</option><option value="left">Left foot</option><option value="head">Head</option><option value="other">Other</option></Select></label><label className="grid gap-2"><Label>Notes</Label><TextArea className="min-h-16" value={notes} onChange={(event) => setNotes(event.target.value)} /></label><Button className="w-full" variant="primary" disabled={saving} onClick={() => void saveSubmoment()}><Save size={15} />Save {selectedSubMomentType.name}</Button><div><div className="mb-2 flex items-center justify-between"><Label>Saved</Label><Badge>{selectedMoment.subMoments.length}</Badge></div>{selectedMoment.subMoments.length === 0 ? <p className="text-xs text-slate-500">There are no submoments yet.</p> : selectedMoment.subMoments.map((submoment) => <div key={submoment.id} className="flex items-center gap-2 border-t border-white/[.06] py-2"><button className="flex min-w-0 flex-1 items-center gap-2 text-left" onClick={() => { const video = videoRef.current; if (!video || submoment.timeSeconds === null) return; video.pause(); video.currentTime = submoment.timeSeconds; setCurrentTime(submoment.timeSeconds); }}><span className="h-3 w-3 rounded-full" style={{ backgroundColor: submoment.subMomentType.color }} /><span className="min-w-0 flex-1 truncate text-xs text-slate-300">{submoment.subMomentType.name} · {formatTime(submoment.timeSeconds || 0)}</span></button><Button size="icon" variant="danger" className="h-7 w-7" onClick={() => void removeSubmoment(submoment)}><Trash2 size={12} /></Button></div>)}</div></div> : <div className="mt-4 rounded-xl border border-dashed border-white/10 p-5 text-center text-xs text-slate-500">Select a moment to begin.</div>}
+        {selectedMoment && selectedSubMomentType ? <div className="mt-4 space-y-4 border-t border-white/10 pt-4">{editingSubmomentId ? <div className="flex items-center justify-between rounded-lg border border-leaf-400/25 bg-leaf-400/10 px-3 py-2 text-xs text-emerald-100"><span>Editing saved submoment</span><Button size="sm" onClick={cancelSubmomentEdit}><X size={13} />Cancel</Button></div> : null}{selectedSubMomentType.requiresFieldLocation ? <div><div className="mb-2 flex items-center justify-between"><Label>Occurrence location</Label><MapPin size={14} className="text-slate-500" /></div><PitchSurface value={fieldPoint} color={selectedSubMomentType.color} direction={attackDirection} directionLabel={directionLabel} onChange={setFieldPoint} /></div> : null}{selectedSubMomentType.requiresGoalLocation ? <div><div className="mb-2 flex items-center justify-between"><Label>Goal location</Label><Goal size={14} className="text-slate-500" /></div><GoalSurface points={goalMarkers} value={goalPoint} color={selectedSubMomentType.color} onChange={setGoalPoint} /></div> : null}<label className="grid gap-2"><Label>Body part</Label><Select value={foot} onChange={(event) => setFoot(event.target.value)}><option value="">Not specified</option><option value="right">Right foot</option><option value="left">Left foot</option><option value="head">Head</option><option value="other">Other</option></Select></label><label className="grid gap-2"><Label>Notes</Label><TextArea className="min-h-16" value={notes} onChange={(event) => setNotes(event.target.value)} /></label><Button className="w-full" variant="primary" disabled={saving} onClick={() => void saveSubmoment()}><Save size={15} />{editingSubmomentId ? "Update" : "Save"} {selectedSubMomentType.name}</Button><div><div className="mb-2 flex items-center justify-between"><Label>Saved</Label><Badge>{selectedMoment.subMoments.length}</Badge></div>{selectedMoment.subMoments.length === 0 ? <p className="text-xs text-slate-500">There are no submoments yet.</p> : selectedMoment.subMoments.map((submoment) => <div key={submoment.id} className="flex items-center gap-2 border-t border-white/[.06] py-2"><button className="flex min-w-0 flex-1 items-center gap-2 text-left" onClick={() => { const video = videoRef.current; if (!video || submoment.timeSeconds === null) return; video.pause(); video.currentTime = submoment.timeSeconds; setCurrentTime(submoment.timeSeconds); }}><span className="h-3 w-3 rounded-full" style={{ backgroundColor: submoment.subMomentType.color }} /><span className="min-w-0 flex-1 truncate text-xs text-slate-300">{submoment.subMomentType.name} · {formatTime(submoment.timeSeconds || 0)}</span></button><Button size="icon" className="h-7 w-7" onClick={() => editSubmoment(submoment)}><Pencil size={12} /></Button><Button size="icon" variant="danger" className="h-7 w-7" onClick={() => void removeSubmoment(submoment)}><Trash2 size={12} /></Button></div>)}</div></div> : <div className="mt-4 rounded-xl border border-dashed border-white/10 p-5 text-center text-xs text-slate-500">Select a moment to begin.</div>}
       </Panel>
     </div>
   </div>;

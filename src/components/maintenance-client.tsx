@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Loader2, Pencil, Plus, Trash2 } from "lucide-react";
+import { Download, Loader2, Pencil, Plus, Trash2 } from "lucide-react";
 
 import { Button, Input, Label, Panel, Select } from "@/components/ui";
 import type { MaintenanceRecord } from "@/lib/domain";
@@ -84,7 +84,7 @@ export function MaintenanceClient() {
   }
 
   return <div className="mx-auto max-w-6xl space-y-5">
-    <div><p className="text-xs font-bold uppercase tracking-[.22em] text-leaf-400">Configuration</p><h1 className="mt-2 text-3xl font-bold text-white">Maintenance</h1><p className="mt-2 text-sm text-slate-400">Manage seasons, clubs and competitions used throughout the application.</p></div>
+    <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between"><div><p className="text-xs font-bold uppercase tracking-[.22em] text-leaf-400">Configuration</p><h1 className="mt-2 text-3xl font-bold text-white">Maintenance</h1><p className="mt-2 text-sm text-slate-400">Manage seasons, clubs and competitions used throughout the application.</p></div><a href="/api/backup" download><Button><Download size={15} />Download data backup</Button></a></div>
     <div className="flex flex-wrap gap-2">{tabs.map((tab) => <Button key={tab.key} variant={resource === tab.key ? "primary" : "secondary"} onClick={() => setResource(tab.key)}>{tab.label}</Button>)}</div>
     {error ? <div className="rounded-xl border border-red-400/30 bg-red-500/10 p-3 text-sm text-red-100">{error}</div> : null}
     {loading ? <div className="flex min-h-72 items-center justify-center text-slate-400"><Loader2 className="mr-2 animate-spin" />Loading maintenance data…</div> : <div className="grid gap-5 lg:grid-cols-[25rem_minmax(0,1fr)]">

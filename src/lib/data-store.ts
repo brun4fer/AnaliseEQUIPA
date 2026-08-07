@@ -1,3 +1,5 @@
+import { Prisma } from "@prisma/client";
+
 import { prisma } from "@/lib/prisma";
 import { getAttackDirectionAtTime, getMatchPeriodAtTime } from "@/lib/match-periods";
 
@@ -26,7 +28,7 @@ function serializeMatch(match: Awaited<ReturnType<typeof prisma.match.findFirstO
 
 export async function listMatches() {
   const rows = await prisma.match.findMany({
-    include: { _count: { select: { moments: true } } },
+    include: { video: true, _count: { select: { moments: true } } },
     orderBy: [{ matchDate: "desc" }, { createdAt: "desc" }]
   });
   return rows.map((match) => ({
@@ -37,6 +39,10 @@ export async function listMatches() {
     season: match.season,
     roundName: match.roundName,
     matchDate: match.matchDate?.toISOString() ?? null,
+    seasonId: match.seasonId,
+    opponentClubId: match.opponentClubId,
+    competitionId: match.competitionId,
+    video: match.video ? { ...match.video, fileSize: Number(match.video.fileSize) } : null,
     momentCount: match._count.moments
   }));
 }
@@ -95,9 +101,33 @@ export async function updateMatch(matchId: string, input: Record<string, unknown
   const current = await prisma.match.findUniqueOrThrow({ where: { id: matchId } });
   const nextMarkers = Object.fromEntries(markerKeys.map((key) => [key, data[key] === undefined ? current[key] : data[key]])) as Record<PeriodMarkerKey, number | null>;
   validatePeriodMarkers(nextMarkers);
+  const updateData: Prisma.MatchUncheckedUpdateInput = { ...data };
+
+  const selectionChanged = ["seasonId", "competitionId", "opponentClubId"].some((key) => input[key] !== undefined);
+  if (selectionChanged) {
+    const seasonId = String(input.seasonId ?? current.seasonId ?? "");
+    const competitionId = String(input.competitionId ?? current.competitionId ?? "");
+    const opponentClubId = String(input.opponentClubId ?? current.opponentClubId ?? "");
+    const competition = await prisma.competition.findUnique({ where: { id: competitionId }, include: { season: true, clubs: { where: { id: opponentClubId }, select: { id: true, name: true } } } });
+    if (!competition || competition.seasonId !== seasonId || competition.clubs.length !== 1) throw new Error("The selected opponent does not participate in this competition.");
+    updateData.seasonId = seasonId;
+    updateData.competitionId = competitionId;
+    updateData.opponentClubId = opponentClubId;
+    updateData.season = competition.season.name;
+    updateData.competition = competition.name;
+    updateData.opponentName = competition.clubs[0].name;
+    updateData.title = `Feirense vs ${competition.clubs[0].name}`;
+  }
+
+  if (input.roundName !== undefined) updateData.roundName = optionalString(input.roundName);
+  if (input.venue !== undefined) updateData.venue = optionalString(input.venue);
+  if (input.notes !== undefined) updateData.notes = optionalString(input.notes);
+  if (input.matchDate !== undefined) updateData.matchDate = input.matchDate ? validDate(input.matchDate) : null;
+  if (input.firstHalfAttackDirection !== undefined) updateData.firstHalfAttackDirection = validDirection(input.firstHalfAttackDirection);
+  if (input.secondHalfAttackDirection !== undefined) updateData.secondHalfAttackDirection = validDirection(input.secondHalfAttackDirection);
 
   const match = await prisma.$transaction(async (tx) => {
-    await tx.match.update({ where: { id: matchId }, data });
+    await tx.match.update({ where: { id: matchId }, data: updateData });
     await tx.moment.updateMany({ where: { matchId }, data: { period: null } });
     if (nextMarkers.firstHalfStartSeconds !== null && nextMarkers.firstHalfEndSeconds !== null) {
       await tx.moment.updateMany({ where: { matchId, startTimeSeconds: { gte: nextMarkers.firstHalfStartSeconds, lte: nextMarkers.firstHalfEndSeconds } }, data: { period: "first_half" } });
@@ -108,6 +138,10 @@ export async function updateMatch(matchId: string, input: Record<string, unknown
     return tx.match.findUniqueOrThrow({ where: { id: matchId }, include: matchInclude });
   });
   return serializeMatch(match as never);
+}
+
+export async function deleteMatch(matchId: string) {
+  await prisma.match.delete({ where: { id: matchId } });
 }
 
 export async function saveVideo(matchId: string, input: Record<string, unknown>) {
@@ -264,6 +298,7 @@ export async function saveMomentType(input: Record<string, unknown>, id?: string
     sortOrder: Number(input.sortOrder || 0)
   };
   if (!data.name || !data.code) throw new Error("Name and code are required.");
+  await validateShortcut(data.defaultShortcut, id);
   return id ? prisma.momentType.update({ where: { id }, data }) : prisma.momentType.create({ data });
 }
 
@@ -278,7 +313,18 @@ export async function saveSubMomentType(input: Record<string, unknown>, id?: str
     sortOrder: Number(input.sortOrder || 0)
   };
   if (!data.name || !data.code) throw new Error("Name and code are required.");
+  await validateShortcut(data.defaultShortcut, id);
   return id ? prisma.subMomentType.update({ where: { id }, data }) : prisma.subMomentType.create({ data });
+}
+
+export async function deleteMomentType(id: string) {
+  if (await prisma.moment.count({ where: { momentTypeId: id } })) throw new Error("This moment type is already used and cannot be deleted. Rename it instead.");
+  await prisma.momentType.delete({ where: { id } });
+}
+
+export async function deleteSubMomentType(id: string) {
+  if (await prisma.subMoment.count({ where: { subMomentTypeId: id } })) throw new Error("This submoment type is already used and cannot be deleted. Rename it instead.");
+  await prisma.subMomentType.delete({ where: { id } });
 }
 
 export const deleteMoment = (id: string) => prisma.moment.delete({ where: { id } });
@@ -301,6 +347,29 @@ function optionalCoordinate(value: unknown) {
   if (number === null) return null;
   if (number < 0 || number > 100) throw new Error("Coordinates must be between 0 and 100.");
   return number;
+}
+
+function validDate(value: unknown) {
+  const date = new Date(String(value));
+  if (Number.isNaN(date.getTime())) throw new Error("Invalid match date.");
+  return date;
+}
+
+function validDirection(value: unknown) {
+  const direction = String(value);
+  if (direction !== "left_to_right" && direction !== "right_to_left") throw new Error("Invalid attack direction.");
+  return direction;
+}
+
+async function validateShortcut(shortcut: string | null, currentId?: string) {
+  if (!shortcut) return;
+  const key = shortcut.toLowerCase();
+  const [moment, submoment] = await Promise.all([
+    prisma.momentType.findFirst({ where: { defaultShortcut: { equals: key, mode: "insensitive" }, id: currentId ? { not: currentId } : undefined }, select: { name: true } }),
+    prisma.subMomentType.findFirst({ where: { defaultShortcut: { equals: key, mode: "insensitive" }, id: currentId ? { not: currentId } : undefined }, select: { name: true } })
+  ]);
+  const conflict = moment || submoment;
+  if (conflict) throw new Error(`Shortcut “${shortcut}” is already used by ${conflict.name}.`);
 }
 
 type PeriodMarkerKey = "firstHalfStartSeconds" | "firstHalfEndSeconds" | "secondHalfStartSeconds" | "secondHalfEndSeconds";

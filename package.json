@@ -7,6 +7,8 @@
     "build": "node ./node_modules/prisma/build/index.js generate && next build",
     "start": "next start",
     "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test src/lib/*.test.ts",
     "prisma:generate": "node ./node_modules/prisma/build/index.js generate",
     "prisma:push": "node ./node_modules/prisma/build/index.js db push",
     "prisma:migrate": "node ./node_modules/prisma/build/index.js migrate dev",
@@ -15,6 +17,7 @@
   "dependencies": {
     "@prisma/client": "^6.19.3",
     "dotenv": "^17.4.2",
+    "jszip": "^3.10.1",
     "lucide-react": "^0.468.0",
     "mediabunny": "^1.45.0",
     "next": "^15.5.19",

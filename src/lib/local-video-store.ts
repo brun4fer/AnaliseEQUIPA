@@ -1,7 +1,7 @@
 const DATABASE_NAME = "analise-equipa-local-videos";
 const STORE_NAME = "match-videos";
 const VERSION = 1;
-const MAX_PERSISTED_VIDEO_SIZE = 1024 * 1024 * 1024;
+export const MAX_PERSISTED_VIDEO_SIZE = 1024 * 1024 * 1024;
 
 type StoredVideo = { matchId: string; file: File; savedAt: number };
 
@@ -45,6 +45,10 @@ export async function rememberMatchVideo(matchId: string, file: File) {
   } finally {
     database.close();
   }
+}
+
+export function videoPersistsAfterRestart(file: Pick<File, "size">) {
+  return file.size <= MAX_PERSISTED_VIDEO_SIZE;
 }
 
 export async function getRememberedMatchVideo(matchId: string) {

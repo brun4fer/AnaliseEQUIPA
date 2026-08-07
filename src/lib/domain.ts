@@ -70,6 +70,7 @@ export type MatchSummary = {
   seasonId?: string | null;
   opponentClubId?: string | null;
   competitionId?: string | null;
+  video?: VideoRecord | null;
   momentCount: number;
 };
 

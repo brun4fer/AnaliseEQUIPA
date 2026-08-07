@@ -3,13 +3,14 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, Check, ChevronsLeft, ChevronsRight, CircleStop, Clock3, FileVideo, Keyboard, Loader2, Pause, Pencil, Play, Tags, Trash2, Upload, X } from "lucide-react";
+import { ArrowLeft, Check, ChevronsLeft, ChevronsRight, CircleStop, Clock3, FileVideo, Keyboard, Loader2, Pause, Pencil, Play, Settings2, Tags, Trash2, Upload, X } from "lucide-react";
 
+import { MatchEditDialog } from "@/components/match-edit-dialog";
 import { MomentEditDialog } from "@/components/moment-edit-dialog";
 import { Badge, Button, Input, Label, Panel } from "@/components/ui";
 import type { MatchDetail, MomentRecord, MomentTypeRecord, SettingsPayload, VideoRecord } from "@/lib/domain";
 import { apiFetch } from "@/lib/http";
-import { getRememberedMatchVideo, rememberMatchVideo } from "@/lib/local-video-store";
+import { getRememberedMatchVideo, rememberMatchVideo, videoPersistsAfterRestart } from "@/lib/local-video-store";
 import { getAttackDirectionAtTime, getMatchPeriodAtTime } from "@/lib/match-periods";
 import { formatBytes, formatTime, roundTime } from "@/lib/time";
 
@@ -42,6 +43,7 @@ export function AnalysisWorkspace({ matchId }: { matchId: string }) {
   const [activeMoments, setActiveMoments] = useState<ActiveMoment[]>([]);
   const [selectedMomentId, setSelectedMomentId] = useState<string | null>(null);
   const [editingMoment, setEditingMoment] = useState<MomentRecord | null>(null);
+  const [editingMatch, setEditingMatch] = useState(false);
   const [previewEnd, setPreviewEnd] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
   const [sideHeight, setSideHeight] = useState<number | undefined>();
@@ -83,7 +85,7 @@ export function AnalysisWorkspace({ matchId }: { matchId: string }) {
     if (sourceUrl) URL.revokeObjectURL(sourceUrl);
     const url = URL.createObjectURL(file);
     setSourceUrl(url);
-    setNotice(null);
+    setNotice(videoPersistsAfterRestart(file) ? null : "This large video is available during this browser session. Select it again after closing or fully refreshing the app.");
     await rememberMatchVideo(matchId, file).catch(() => undefined);
 
     const probe = document.createElement("video");
@@ -245,6 +247,19 @@ export function AnalysisWorkspace({ matchId }: { matchId: string }) {
     } catch (error) { setNotice(error instanceof Error ? error.message : "Could not save the match period."); }
   }
 
+  async function saveMatch(input: Record<string, unknown>) {
+    const saved = await apiFetch<MatchDetail>(`/api/matches/${matchId}`, { method: "PATCH", body: JSON.stringify(input) });
+    setMatch(saved);
+    setEditingMatch(false);
+    setNotice("Match updated.");
+  }
+
+  async function removeCurrentMatch() {
+    await apiFetch(`/api/matches/${matchId}`, { method: "DELETE" });
+    router.replace("/");
+    router.refresh();
+  }
+
   if (loading) return <div className="flex min-h-[65vh] items-center justify-center text-slate-400"><Loader2 className="mr-2 animate-spin" />Preparing analysis…</div>;
   if (!match || !settings) return <Panel className="border-red-400/20 p-5 text-red-100">{notice || "Could not open this match."}</Panel>;
 
@@ -255,7 +270,7 @@ export function AnalysisWorkspace({ matchId }: { matchId: string }) {
   return <div className="space-y-4">
     <input ref={fileInputRef} type="file" accept="video/*" className="hidden" onChange={(event) => void loadVideo(event.target.files?.[0])} />
 
-    <header className="flex flex-col gap-4 rounded-2xl border border-white/10 bg-white/[.045] p-4 lg:flex-row lg:items-center lg:justify-between"><div><Link href="/" className="inline-flex items-center gap-1 text-xs text-slate-500 hover:text-white"><ArrowLeft size={13} />Matches</Link><h1 className="mt-2 text-2xl font-bold text-white">{match.title}</h1><p className="mt-1 text-sm text-slate-500">{match.competition || "No competition"} · {attackDirection ? `attack ${attackDirection === "left_to_right" ? "→" : "←"}` : "period not identified"}</p></div><Button onClick={() => fileInputRef.current?.click()}><Upload size={16} />{sourceUrl ? "Change video" : "Select video"}</Button></header>
+    <header className="flex flex-col gap-4 rounded-2xl border border-white/10 bg-white/[.045] p-4 lg:flex-row lg:items-center lg:justify-between"><div><Link href="/" className="inline-flex items-center gap-1 text-xs text-slate-500 hover:text-white"><ArrowLeft size={13} />Matches</Link><h1 className="mt-2 text-2xl font-bold text-white">{match.title}</h1><p className="mt-1 text-sm text-slate-500">{match.competition || "No competition"} · {attackDirection ? `attack ${attackDirection === "left_to_right" ? "→" : "←"}` : "period not identified"}</p></div><div className="flex flex-wrap gap-2"><Button onClick={() => setEditingMatch(true)}><Settings2 size={16} />Edit match</Button><Button onClick={() => fileInputRef.current?.click()}><Upload size={16} />{sourceUrl ? "Change video" : "Select video"}</Button></div></header>
     {notice ? <div className="rounded-xl border border-leaf-400/25 bg-leaf-400/10 px-4 py-3 text-sm text-emerald-100">{notice}</div> : null}
     {activeTypes.length > 0 ? <div className="flex flex-wrap items-center gap-2 rounded-xl border border-amber-300/25 bg-amber-400/10 px-4 py-3 text-sm text-amber-100"><CircleStop size={16} /><span className="font-semibold">In progress:</span>{activeTypes.map((type) => <Badge key={type.id} style={{ borderColor: type.color, color: type.color }}>{type.name} · key {type.defaultShortcut}</Badge>)}</div> : null}
 
@@ -273,6 +288,7 @@ export function AnalysisWorkspace({ matchId }: { matchId: string }) {
     <Panel className="flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:justify-between"><div><Label>Identification</Label><h2 className="mt-1 font-bold text-white">Submoments</h2><p className="mt-1 text-sm text-slate-500">After tagging the main moments, classify each clip and mark pitch/goal locations in a dedicated area.</p></div><Button variant="primary" disabled={match.moments.length === 0 || activeMoments.length > 0} onClick={() => router.push(`/analysis/${matchId}/submoments`)}><Tags size={16} />Identify submoments</Button></Panel>
 
     {editingMoment ? <MomentEditDialog moment={editingMoment} momentTypes={settings.momentTypes} currentTime={currentTime} duration={duration || match.video?.durationSeconds || 0} onSave={(input) => updateMoment(editingMoment, input)} onClose={() => setEditingMoment(null)} /> : null}
+    {editingMatch ? <MatchEditDialog match={match} onSave={saveMatch} onDelete={removeCurrentMatch} onClose={() => setEditingMatch(false)} /> : null}
   </div>;
 }
 

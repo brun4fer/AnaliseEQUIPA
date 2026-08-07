@@ -13,6 +13,15 @@ export function roundTime(seconds: number) {
   return Math.round(seconds * 10) / 10;
 }
 
+export function formatPreciseTime(seconds: number) {
+  if (!Number.isFinite(seconds)) return "00:00.0";
+  const safe = Math.max(0, seconds);
+  const hours = Math.floor(safe / 3600);
+  const minutes = Math.floor((safe % 3600) / 60);
+  const remaining = (safe % 60).toFixed(1).padStart(4, "0");
+  return hours > 0 ? `${hours}:${String(minutes).padStart(2, "0")}:${remaining}` : `${String(minutes).padStart(2, "0")}:${remaining}`;
+}
+
 export function formatBytes(bytes: number) {
   if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
   const units = ["B", "KB", "MB", "GB"];

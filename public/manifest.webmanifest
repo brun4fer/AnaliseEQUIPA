@@ -2,7 +2,11 @@
   "name": "Feirense — Team Analysis",
   "short_name": "Team Analysis",
   "start_url": "/",
+  "id": "/",
+  "scope": "/",
   "display": "standalone",
+  "orientation": "landscape",
+  "categories": ["sports", "productivity"],
   "background_color": "#04100c",
   "theme_color": "#0b281d",
   "icons": [
