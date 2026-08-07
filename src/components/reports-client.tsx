@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Archive, CheckSquare, FileVideo, Loader2, Pause, Play, Square, Upload, X } from "lucide-react";
 import { Badge, Button, Label, Panel, Select } from "@/components/ui";
-import type { MatchDetail, MatchSummary, MomentRecord, SettingsPayload } from "@/lib/domain";
+import type { AccountPayload, MatchDetail, MatchSummary, MomentRecord, SettingsPayload } from "@/lib/domain";
 import { isExportPickerCancellation, pickExportDirectory, writeBlobToDirectory } from "@/lib/export-directory";
 import { apiFetch } from "@/lib/http";
 import { getRememberedMatchVideo, rememberMatchVideo } from "@/lib/local-video-store";
@@ -31,8 +31,9 @@ export function ReportsClient() {
   const [exporting, setExporting] = useState(false);
   const [status, setStatus] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
+  const [teamName, setTeamName] = useState("Team");
 
-  useEffect(() => { Promise.all([apiFetch<MatchSummary[]>("/api/matches"), apiFetch<SettingsPayload>("/api/settings")]).then(([rows, config]) => { setMatches(rows); setSettings(config); }).catch((error: Error) => setNotice(error.message)).finally(() => setLoading(false)); }, []);
+  useEffect(() => { Promise.all([apiFetch<MatchSummary[]>("/api/matches"), apiFetch<SettingsPayload>("/api/settings"), apiFetch<AccountPayload>("/api/account")]).then(([rows, config, account]) => { setMatches(rows); setSettings(config); setTeamName(account.teamName || "Team"); }).catch((error: Error) => setNotice(error.message)).finally(() => setLoading(false)); }, []);
   useEffect(() => { let cancelled = false; if (!selectedIds.length) { setDetails([]); return; } setLoadingDetails(true); Promise.all(selectedIds.map((id) => apiFetch<MatchDetail>(`/api/matches/${id}`))).then((rows) => { if (!cancelled) setDetails(rows); }).catch((error: Error) => setNotice(error.message)).finally(() => { if (!cancelled) setLoadingDetails(false); }); return () => { cancelled = true; }; }, [selectedIds]);
   useEffect(() => () => { if (objectUrl.current) URL.revokeObjectURL(objectUrl.current); }, []);
 
@@ -66,7 +67,7 @@ export function ReportsClient() {
     let directory = null;
     try { directory = await pickExportDirectory(); } catch (error) { if (isExportPickerCancellation(error)) return; return setNotice(error instanceof Error ? error.message : "Could not open the export folder."); }
     setExporting(true); setNotice(null);
-    const root = `Feirense-report-${selectedIds.length}-matches-${clips.length}-clips`;
+    const root = `${safeName(teamName)}-report-${selectedIds.length}-matches-${clips.length}-clips`;
     const archive = directory ? null : new (await import("jszip")).default();
     const indexRows = [["match", "moment", "start", "end", "submoments", "files"]];
     let completed = 0;

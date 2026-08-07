@@ -20,10 +20,10 @@ export default function ChangePasswordPage() {
     setBusy(true);
     setError("");
     const response = await fetch("/api/auth/change-password", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ currentPassword, newPassword }) });
-    const data = await response.json() as { error?: string };
+    const data = await response.json() as { error?: string; needsOnboarding?: boolean };
     setBusy(false);
     if (!response.ok) return setError(data.error || "Could not change the password.");
-    router.replace("/");
+    router.replace(data.needsOnboarding ? "/onboarding" : "/");
     router.refresh();
   }
 

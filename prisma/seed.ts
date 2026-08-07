@@ -19,15 +19,16 @@ const subMomentTypes = [
 ];
 
 async function main() {
+  const workspace = await prisma.workspace.upsert({ where: { id: "workspace_feirense" }, update: {}, create: { id: "workspace_feirense", name: "Feirense" } });
   for (const type of momentTypes) {
-    await prisma.momentType.upsert({ where: { code: type.code }, update: type, create: type });
+    await prisma.momentType.upsert({ where: { workspaceId_code: { workspaceId: workspace.id, code: type.code } }, update: type, create: { ...type, workspaceId: workspace.id } });
   }
   for (const type of subMomentTypes) {
-    await prisma.subMomentType.upsert({ where: { code: type.code }, update: type, create: type });
+    await prisma.subMomentType.upsert({ where: { workspaceId_code: { workspaceId: workspace.id, code: type.code } }, update: type, create: { ...type, workspaceId: workspace.id } });
   }
 
-  const moments = await prisma.momentType.findMany();
-  const submoments = await prisma.subMomentType.findMany();
+  const moments = await prisma.momentType.findMany({ where: { workspaceId: workspace.id } });
+  const submoments = await prisma.subMomentType.findMany({ where: { workspaceId: workspace.id } });
   for (const moment of moments) {
     await prisma.momentType.update({
       where: { id: moment.id },

@@ -14,7 +14,7 @@ async function validSession(token?: string) {
   if (base64url(await crypto.subtle.sign("HMAC", key, bytes(data))) !== signature) return null;
   try {
     const normalized = data.replace(/-/g, "+").replace(/_/g, "/");
-    const payload = JSON.parse(atob(normalized)) as { exp: number; mustChangePassword: boolean };
+    const payload = JSON.parse(atob(normalized)) as { exp: number; mustChangePassword: boolean; needsOnboarding?: boolean };
     return payload.exp > Date.now() ? payload : null;
   } catch {
     return null;
@@ -34,6 +34,10 @@ export async function middleware(request: NextRequest) {
   if (session.mustChangePassword && !["/change-password", "/api/auth/change-password", "/api/auth/logout"].includes(path)) {
     if (path.startsWith("/api/")) return NextResponse.json({ error: "Change the temporary password before continuing." }, { status: 403 });
     return NextResponse.redirect(new URL("/change-password", request.url));
+  }
+  if (session.needsOnboarding && !["/change-password", "/api/auth/change-password", "/onboarding", "/api/account", "/api/account/team", "/api/auth/logout"].includes(path)) {
+    if (path.startsWith("/api/")) return NextResponse.json({ error: "Complete the team setup before continuing." }, { status: 403 });
+    return NextResponse.redirect(new URL("/onboarding", request.url));
   }
   return NextResponse.next();
 }

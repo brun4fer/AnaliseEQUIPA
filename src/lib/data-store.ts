@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
+import { requireWorkspace } from "@/lib/auth";
 import { getAttackDirectionAtTime, getMatchPeriodAtTime } from "@/lib/match-periods";
 
 const matchInclude = {
@@ -27,7 +28,9 @@ function serializeMatch(match: Awaited<ReturnType<typeof prisma.match.findFirstO
 }
 
 export async function listMatches() {
+  const { workspace } = await requireWorkspace();
   const rows = await prisma.match.findMany({
+    where: { workspaceId: workspace.id },
     include: { video: true, _count: { select: { moments: true } } },
     orderBy: [{ matchDate: "desc" }, { createdAt: "desc" }]
   });
@@ -48,25 +51,28 @@ export async function listMatches() {
 }
 
 export async function getMatch(matchId: string) {
-  const match = await prisma.match.findUniqueOrThrow({ where: { id: matchId }, include: matchInclude });
+  const { workspace } = await requireWorkspace();
+  const match = await prisma.match.findFirstOrThrow({ where: { id: matchId, workspaceId: workspace.id }, include: matchInclude });
   return serializeMatch(match as never);
 }
 
 export async function createMatch(input: Record<string, unknown>) {
+  const { workspace } = await requireWorkspace();
   const seasonId = String(input.seasonId || "");
   const competitionId = String(input.competitionId || "");
   const opponentClubId = String(input.opponentClubId || "");
   if (!seasonId || !competitionId || !opponentClubId) throw new Error("Season, competition and opponent are required.");
-  const competitionRecord = await prisma.competition.findUnique({
-    where: { id: competitionId },
+  const competitionRecord = await prisma.competition.findFirst({
+    where: { id: competitionId, workspaceId: workspace.id },
     include: { season: true, clubs: { where: { id: opponentClubId }, select: { id: true, name: true } } }
   });
   if (!competitionRecord || competitionRecord.seasonId !== seasonId || competitionRecord.clubs.length !== 1) throw new Error("The selected opponent does not participate in this competition.");
   const opponent = competitionRecord.clubs[0];
-  const title = String(input.title || `Feirense vs ${opponent.name}`).trim();
+  const title = String(input.title || `${workspace.name} vs ${opponent.name}`).trim();
   const match = await prisma.match.create({
     data: {
       title,
+      workspaceId: workspace.id,
       opponentName: opponent.name,
       competition: competitionRecord.name,
       season: competitionRecord.season.name,
@@ -86,6 +92,7 @@ export async function createMatch(input: Record<string, unknown>) {
 }
 
 export async function updateMatch(matchId: string, input: Record<string, unknown>) {
+  const { workspace } = await requireWorkspace();
   const markerKeys = [
     "firstHalfStartSeconds",
     "firstHalfEndSeconds",
@@ -98,7 +105,7 @@ export async function updateMatch(matchId: string, input: Record<string, unknown
     if (input[key] !== undefined) data[key] = optionalNumber(input[key]);
   }
 
-  const current = await prisma.match.findUniqueOrThrow({ where: { id: matchId } });
+  const current = await prisma.match.findFirstOrThrow({ where: { id: matchId, workspaceId: workspace.id } });
   const nextMarkers = Object.fromEntries(markerKeys.map((key) => [key, data[key] === undefined ? current[key] : data[key]])) as Record<PeriodMarkerKey, number | null>;
   validatePeriodMarkers(nextMarkers);
   const updateData: Prisma.MatchUncheckedUpdateInput = { ...data };
@@ -108,7 +115,7 @@ export async function updateMatch(matchId: string, input: Record<string, unknown
     const seasonId = String(input.seasonId ?? current.seasonId ?? "");
     const competitionId = String(input.competitionId ?? current.competitionId ?? "");
     const opponentClubId = String(input.opponentClubId ?? current.opponentClubId ?? "");
-    const competition = await prisma.competition.findUnique({ where: { id: competitionId }, include: { season: true, clubs: { where: { id: opponentClubId }, select: { id: true, name: true } } } });
+    const competition = await prisma.competition.findFirst({ where: { id: competitionId, workspaceId: workspace.id }, include: { season: true, clubs: { where: { id: opponentClubId, workspaceId: workspace.id }, select: { id: true, name: true } } } });
     if (!competition || competition.seasonId !== seasonId || competition.clubs.length !== 1) throw new Error("The selected opponent does not participate in this competition.");
     updateData.seasonId = seasonId;
     updateData.competitionId = competitionId;
@@ -116,7 +123,7 @@ export async function updateMatch(matchId: string, input: Record<string, unknown
     updateData.season = competition.season.name;
     updateData.competition = competition.name;
     updateData.opponentName = competition.clubs[0].name;
-    updateData.title = `Feirense vs ${competition.clubs[0].name}`;
+    updateData.title = `${workspace.name} vs ${competition.clubs[0].name}`;
   }
 
   if (input.roundName !== undefined) updateData.roundName = optionalString(input.roundName);
@@ -141,10 +148,14 @@ export async function updateMatch(matchId: string, input: Record<string, unknown
 }
 
 export async function deleteMatch(matchId: string) {
+  const { workspace } = await requireWorkspace();
+  await prisma.match.findFirstOrThrow({ where: { id: matchId, workspaceId: workspace.id }, select: { id: true } });
   await prisma.match.delete({ where: { id: matchId } });
 }
 
 export async function saveVideo(matchId: string, input: Record<string, unknown>) {
+  const { workspace } = await requireWorkspace();
+  await prisma.match.findFirstOrThrow({ where: { id: matchId, workspaceId: workspace.id }, select: { id: true } });
   const video = await prisma.video.upsert({
     where: { matchId },
     update: {
@@ -167,22 +178,26 @@ export async function saveVideo(matchId: string, input: Record<string, unknown>)
 }
 
 export async function getSettings() {
+  const { workspace } = await requireWorkspace();
   const [momentTypes, subMomentTypes] = await Promise.all([
-    prisma.momentType.findMany({ include: { allowedSubmoments: true }, orderBy: [{ sortOrder: "asc" }, { name: "asc" }] }),
-    prisma.subMomentType.findMany({ orderBy: [{ sortOrder: "asc" }, { name: "asc" }] })
+    prisma.momentType.findMany({ where: { workspaceId: workspace.id }, include: { allowedSubmoments: true }, orderBy: [{ sortOrder: "asc" }, { name: "asc" }] }),
+    prisma.subMomentType.findMany({ where: { workspaceId: workspace.id }, orderBy: [{ sortOrder: "asc" }, { name: "asc" }] })
   ]);
   return { momentTypes, subMomentTypes };
 }
 
 export async function createMoment(matchId: string, input: Record<string, unknown>) {
+  const { workspace } = await requireWorkspace();
   const start = Number(input.startTimeSeconds);
   const end = Number(input.endTimeSeconds);
   if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) throw new Error("Invalid moment interval.");
-  const match = await prisma.match.findUniqueOrThrow({ where: { id: matchId } });
+  const match = await prisma.match.findFirstOrThrow({ where: { id: matchId, workspaceId: workspace.id } });
+  const momentTypeId = String(input.momentTypeId);
+  await prisma.momentType.findFirstOrThrow({ where: { id: momentTypeId, workspaceId: workspace.id }, select: { id: true } });
   return prisma.moment.create({
     data: {
       matchId,
-      momentTypeId: String(input.momentTypeId),
+      momentTypeId,
       startTimeSeconds: start,
       endTimeSeconds: end,
       durationSeconds: end - start,
@@ -195,7 +210,9 @@ export async function createMoment(matchId: string, input: Record<string, unknow
 }
 
 export async function updateMoment(momentId: string, input: Record<string, unknown>) {
-  const current = await prisma.moment.findUniqueOrThrow({ where: { id: momentId }, include: { match: true } });
+  const { workspace } = await requireWorkspace();
+  const current = await prisma.moment.findFirstOrThrow({ where: { id: momentId, match: { workspaceId: workspace.id } }, include: { match: true } });
+  if (input.momentTypeId !== undefined) await prisma.momentType.findFirstOrThrow({ where: { id: String(input.momentTypeId), workspaceId: workspace.id }, select: { id: true } });
   const start = input.startTimeSeconds === undefined ? current.startTimeSeconds : Number(input.startTimeSeconds);
   const end = input.endTimeSeconds === undefined ? current.endTimeSeconds : Number(input.endTimeSeconds);
   if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) throw new Error("Invalid moment interval.");
@@ -215,7 +232,9 @@ export async function updateMoment(momentId: string, input: Record<string, unkno
 }
 
 export async function createSubMoment(momentId: string, input: Record<string, unknown>) {
-  const type = await prisma.subMomentType.findUniqueOrThrow({ where: { id: String(input.subMomentTypeId) } });
+  const { workspace } = await requireWorkspace();
+  await prisma.moment.findFirstOrThrow({ where: { id: momentId, match: { workspaceId: workspace.id } }, select: { id: true } });
+  const type = await prisma.subMomentType.findFirstOrThrow({ where: { id: String(input.subMomentTypeId), workspaceId: workspace.id } });
   const fieldX = optionalCoordinate(input.fieldX);
   const fieldY = optionalCoordinate(input.fieldY);
   const goalX = optionalCoordinate(input.goalX);
@@ -240,6 +259,9 @@ export async function createSubMoment(momentId: string, input: Record<string, un
 }
 
 export async function updateSubMoment(subMomentId: string, input: Record<string, unknown>) {
+  const { workspace } = await requireWorkspace();
+  await prisma.subMoment.findFirstOrThrow({ where: { id: subMomentId, moment: { match: { workspaceId: workspace.id } } }, select: { id: true } });
+  if (input.subMomentTypeId !== undefined) await prisma.subMomentType.findFirstOrThrow({ where: { id: String(input.subMomentTypeId), workspaceId: workspace.id }, select: { id: true } });
   return prisma.subMoment.update({
     where: { id: subMomentId },
     data: {
@@ -258,7 +280,9 @@ export async function updateSubMoment(subMomentId: string, input: Record<string,
 }
 
 export async function getMapPoints() {
+  const { workspace } = await requireWorkspace();
   const rows = await prisma.subMoment.findMany({
+    where: { moment: { match: { workspaceId: workspace.id } } },
     include: {
       subMomentType: true,
       moment: { include: { momentType: true, match: true } }
@@ -290,6 +314,7 @@ export async function getMapPoints() {
 }
 
 export async function saveMomentType(input: Record<string, unknown>, id?: string) {
+  const { workspace } = await requireWorkspace();
   const data = {
     name: String(input.name || "").trim(),
     code: String(input.code || "").trim().toUpperCase(),
@@ -298,11 +323,16 @@ export async function saveMomentType(input: Record<string, unknown>, id?: string
     sortOrder: Number(input.sortOrder || 0)
   };
   if (!data.name || !data.code) throw new Error("Name and code are required.");
-  await validateShortcut(data.defaultShortcut, id);
-  return id ? prisma.momentType.update({ where: { id }, data }) : prisma.momentType.create({ data });
+  await validateShortcut(workspace.id, data.defaultShortcut, id);
+  if (id) {
+    await prisma.momentType.findFirstOrThrow({ where: { id, workspaceId: workspace.id }, select: { id: true } });
+    return prisma.momentType.update({ where: { id }, data });
+  }
+  return prisma.momentType.create({ data: { ...data, workspaceId: workspace.id } });
 }
 
 export async function saveSubMomentType(input: Record<string, unknown>, id?: string) {
+  const { workspace } = await requireWorkspace();
   const data = {
     name: String(input.name || "").trim(),
     code: String(input.code || "").trim().toUpperCase(),
@@ -313,22 +343,39 @@ export async function saveSubMomentType(input: Record<string, unknown>, id?: str
     sortOrder: Number(input.sortOrder || 0)
   };
   if (!data.name || !data.code) throw new Error("Name and code are required.");
-  await validateShortcut(data.defaultShortcut, id);
-  return id ? prisma.subMomentType.update({ where: { id }, data }) : prisma.subMomentType.create({ data });
+  await validateShortcut(workspace.id, data.defaultShortcut, id);
+  if (id) {
+    await prisma.subMomentType.findFirstOrThrow({ where: { id, workspaceId: workspace.id }, select: { id: true } });
+    return prisma.subMomentType.update({ where: { id }, data });
+  }
+  return prisma.subMomentType.create({ data: { ...data, workspaceId: workspace.id } });
 }
 
 export async function deleteMomentType(id: string) {
+  const { workspace } = await requireWorkspace();
+  await prisma.momentType.findFirstOrThrow({ where: { id, workspaceId: workspace.id }, select: { id: true } });
   if (await prisma.moment.count({ where: { momentTypeId: id } })) throw new Error("This moment type is already used and cannot be deleted. Rename it instead.");
   await prisma.momentType.delete({ where: { id } });
 }
 
 export async function deleteSubMomentType(id: string) {
+  const { workspace } = await requireWorkspace();
+  await prisma.subMomentType.findFirstOrThrow({ where: { id, workspaceId: workspace.id }, select: { id: true } });
   if (await prisma.subMoment.count({ where: { subMomentTypeId: id } })) throw new Error("This submoment type is already used and cannot be deleted. Rename it instead.");
   await prisma.subMomentType.delete({ where: { id } });
 }
 
-export const deleteMoment = (id: string) => prisma.moment.delete({ where: { id } });
-export const deleteSubMoment = (id: string) => prisma.subMoment.delete({ where: { id } });
+export async function deleteMoment(id: string) {
+  const { workspace } = await requireWorkspace();
+  await prisma.moment.findFirstOrThrow({ where: { id, match: { workspaceId: workspace.id } }, select: { id: true } });
+  return prisma.moment.delete({ where: { id } });
+}
+
+export async function deleteSubMoment(id: string) {
+  const { workspace } = await requireWorkspace();
+  await prisma.subMoment.findFirstOrThrow({ where: { id, moment: { match: { workspaceId: workspace.id } } }, select: { id: true } });
+  return prisma.subMoment.delete({ where: { id } });
+}
 
 function optionalString(value: unknown) {
   if (value === null || value === undefined || String(value).trim() === "") return null;
@@ -361,12 +408,12 @@ function validDirection(value: unknown) {
   return direction;
 }
 
-async function validateShortcut(shortcut: string | null, currentId?: string) {
+async function validateShortcut(workspaceId: string, shortcut: string | null, currentId?: string) {
   if (!shortcut) return;
   const key = shortcut.toLowerCase();
   const [moment, submoment] = await Promise.all([
-    prisma.momentType.findFirst({ where: { defaultShortcut: { equals: key, mode: "insensitive" }, id: currentId ? { not: currentId } : undefined }, select: { name: true } }),
-    prisma.subMomentType.findFirst({ where: { defaultShortcut: { equals: key, mode: "insensitive" }, id: currentId ? { not: currentId } : undefined }, select: { name: true } })
+    prisma.momentType.findFirst({ where: { workspaceId, defaultShortcut: { equals: key, mode: "insensitive" }, id: currentId ? { not: currentId } : undefined }, select: { name: true } }),
+    prisma.subMomentType.findFirst({ where: { workspaceId, defaultShortcut: { equals: key, mode: "insensitive" }, id: currentId ? { not: currentId } : undefined }, select: { name: true } })
   ]);
   const conflict = moment || submoment;
   if (conflict) throw new Error(`Shortcut “${shortcut}” is already used by ${conflict.name}.`);

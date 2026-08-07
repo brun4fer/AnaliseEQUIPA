@@ -2,9 +2,12 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
 import { BarChart3, CircleHelp, Goal, Home, LogOut, Map, Plus, Settings, Wrench } from "lucide-react";
 
 import { cn } from "@/lib/cn";
+import type { AccountPayload } from "@/lib/domain";
+import { apiFetch } from "@/lib/http";
 
 const links = [
   { href: "/", label: "Matches", icon: Home },
@@ -18,7 +21,9 @@ const links = [
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  if (pathname === "/login" || pathname === "/change-password") return <main className="min-h-screen">{children}</main>;
+  const [account, setAccount] = useState<AccountPayload | null>(null);
+  useEffect(() => { if (!["/login", "/change-password", "/onboarding"].includes(pathname)) apiFetch<AccountPayload>("/api/account").then(setAccount).catch(() => undefined); }, [pathname]);
+  if (pathname === "/login" || pathname === "/change-password" || pathname === "/onboarding") return <main className="min-h-screen">{children}</main>;
 
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST" });
@@ -34,7 +39,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <Goal size={22} strokeWidth={2.2} />
             </span>
             <span className="min-w-0">
-              <span className="block truncate text-sm font-semibold text-cyan-100">FEIRENSE · ANALYSIS</span>
+              <span className="block truncate text-sm font-semibold text-cyan-100">{(account?.teamName || "TEAM").toUpperCase()} · ANALYSIS</span>
               <span className="block truncate text-xs text-slate-400">Team, video and maps</span>
             </span>
           </Link>

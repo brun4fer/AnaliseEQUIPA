@@ -92,6 +92,14 @@ export type SettingsPayload = {
   subMomentTypes: SubMomentTypeRecord[];
 };
 
+export type AccountPayload = {
+  id: string;
+  name: string;
+  username: string;
+  teamName: string | null;
+  needsOnboarding: boolean;
+};
+
 export type MaintenanceRecord = {
   id: string;
   name: string;

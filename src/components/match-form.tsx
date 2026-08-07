@@ -6,7 +6,7 @@ import { ArrowLeft, Loader2, Save, Wrench } from "lucide-react";
 import Link from "next/link";
 
 import { Button, Input, Label, Panel, Select, TextArea } from "@/components/ui";
-import type { MaintenanceRecord, MatchDetail } from "@/lib/domain";
+import type { AccountPayload, MaintenanceRecord, MatchDetail } from "@/lib/domain";
 import { apiFetch } from "@/lib/http";
 
 export function MatchForm() {
@@ -18,8 +18,10 @@ export function MatchForm() {
   const [loadingOptions, setLoadingOptions] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [teamName, setTeamName] = useState("Team");
 
   useEffect(() => {
+    apiFetch<AccountPayload>("/api/account").then((account) => setTeamName(account.teamName || "Team")).catch(() => undefined);
     Promise.all([
       apiFetch<MaintenanceRecord[]>("/api/maintenance/seasons"),
       apiFetch<MaintenanceRecord[]>("/api/maintenance/competitions"),
@@ -47,7 +49,7 @@ export function MatchForm() {
 
   return <div className="mx-auto max-w-4xl space-y-5">
     <Link href="/" className="inline-flex items-center gap-2 text-sm text-slate-400 hover:text-white"><ArrowLeft size={15} />Back to matches</Link>
-    <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between"><div><p className="text-xs font-bold uppercase tracking-[.22em] text-leaf-400">Preparation</p><h1 className="mt-2 text-3xl font-bold text-white">New Feirense match</h1><p className="mt-2 text-sm text-slate-400">Select the season, competition and opponent configured in Maintenance.</p></div><Link href="/maintenance"><Button><Wrench size={15} />Open Maintenance</Button></Link></div>
+    <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between"><div><p className="text-xs font-bold uppercase tracking-[.22em] text-leaf-400">Preparation</p><h1 className="mt-2 text-3xl font-bold text-white">New {teamName} match</h1><p className="mt-2 text-sm text-slate-400">Select the season, competition and opponent configured in Maintenance.</p></div><Link href="/maintenance"><Button><Wrench size={15} />Open Maintenance</Button></Link></div>
     <Panel className="p-5">{loadingOptions ? <div className="flex min-h-72 items-center justify-center text-slate-400"><Loader2 className="mr-2 animate-spin" />Loading configured options…</div> : <form onSubmit={submit} className="grid gap-5 md:grid-cols-2">
       {error ? <div className="rounded-xl border border-red-400/25 bg-red-500/10 p-3 text-sm text-red-100 md:col-span-2">{error}</div> : null}
       <Choice label="Season" value={form.seasonId} items={seasons} onChange={(seasonId) => setForm((current) => ({ ...current, seasonId, competitionId: "", opponentClubId: "" }))} emptyMessage="No seasons are configured." />

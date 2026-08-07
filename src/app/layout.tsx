@@ -5,7 +5,7 @@ import { PwaRegistrar } from "@/components/pwa-registrar";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Feirense — Team Analysis",
+  title: "Team Analysis",
   description: "Moments, submoments, video and occurrence maps.",
   manifest: "/manifest.webmanifest"
 };

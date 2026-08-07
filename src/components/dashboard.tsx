@@ -6,7 +6,7 @@ import { Calendar, Clapperboard, MapPinned, Pencil, Play, Plus, Search, Trash2 }
 
 import { MatchEditDialog } from "@/components/match-edit-dialog";
 import { Badge, Button, Input, Panel } from "@/components/ui";
-import type { MatchDetail, MatchSummary } from "@/lib/domain";
+import type { AccountPayload, MatchDetail, MatchSummary } from "@/lib/domain";
 import { apiFetch } from "@/lib/http";
 import { formatTime } from "@/lib/time";
 
@@ -16,10 +16,11 @@ export function Dashboard() {
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [editingMatch, setEditingMatch] = useState<MatchDetail | null>(null);
+  const [teamName, setTeamName] = useState("Team");
 
   useEffect(() => {
-    apiFetch<MatchSummary[]>("/api/matches")
-      .then(setMatches)
+    Promise.all([apiFetch<MatchSummary[]>("/api/matches"), apiFetch<AccountPayload>("/api/account")])
+      .then(([rows, account]) => { setMatches(rows); setTeamName(account.teamName || "Team"); })
       .catch((caught: Error) => setError(caught.message))
       .finally(() => setLoading(false));
   }, []);
@@ -72,7 +73,7 @@ export function Dashboard() {
           <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
             <div>
               <p className="text-xs font-medium uppercase tracking-[.28em] text-cyan-200/80">Analysis hub</p>
-              <h1 className="mt-2 text-2xl font-semibold text-white sm:text-3xl">Feirense matches</h1>
+              <h1 className="mt-2 text-2xl font-semibold text-white sm:text-3xl">{teamName} matches</h1>
               <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-400">Open a match, select its local video and tag tactical moments without uploading the file.</p>
             </div>
             <Link href="/matches/new" className="shrink-0"><Button variant="primary"><Plus size={17} />Create new match</Button></Link>
@@ -94,7 +95,7 @@ export function Dashboard() {
         ) : filteredMatches.length === 0 ? <Panel className="md:col-span-2 xl:col-span-3 p-8 text-center text-sm text-slate-400">No matches found for “{query}”.</Panel> : filteredMatches.map((match) => (
           <Panel key={match.id} className="flex min-h-60 flex-col justify-between overflow-hidden">
             <div className="p-4">
-              <div className="flex items-start justify-between gap-3"><div className="min-w-0"><h2 className="truncate text-lg font-semibold text-white">{match.title}</h2><p className="mt-1 truncate text-sm text-slate-400">Feirense vs {match.opponentName}</p></div><Badge className="shrink-0 border-cyan-300/20 bg-cyan-300/10 text-cyan-100">{match.momentCount} {match.momentCount === 1 ? "moment" : "moments"}</Badge></div>
+              <div className="flex items-start justify-between gap-3"><div className="min-w-0"><h2 className="truncate text-lg font-semibold text-white">{match.title}</h2><p className="mt-1 truncate text-sm text-slate-400">{teamName} vs {match.opponentName}</p></div><Badge className="shrink-0 border-cyan-300/20 bg-cyan-300/10 text-cyan-100">{match.momentCount} {match.momentCount === 1 ? "moment" : "moments"}</Badge></div>
               <div className="mt-4 grid gap-2 text-sm text-slate-400"><Info icon={<Calendar size={15} />} value={formatDate(match.matchDate)} /><Info icon={<Clapperboard size={15} />} value={match.competition ?? "Competition not set"} />{match.video ? <Info icon={<Play size={15} />} value={`${match.video.fileName} · ${formatTime(match.video.durationSeconds)}`} /> : <Info icon={<MapPinned size={15} />} value="Local video not validated yet" />}</div>
             </div>
             <div className="flex items-center gap-2 border-t border-white/10 bg-black/10 p-3"><Link href={`/analysis/${match.id}`} className="min-w-0 flex-1"><Button variant="primary" className="w-full"><Play size={16} />Open analysis</Button></Link><Button size="icon" aria-label="Edit match" onClick={() => void openEdit(match.id)}><Pencil size={16} /></Button><Button variant="danger" size="icon" aria-label="Delete match" onClick={() => void removeMatch(match)}><Trash2 size={16} /></Button></div>

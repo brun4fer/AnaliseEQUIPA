@@ -1,11 +1,23 @@
 import { prisma } from "@/lib/prisma";
+import { requireWorkspace } from "@/lib/auth";
 
 export async function GET() {
+  const { workspace } = await requireWorkspace();
+  const matchWhere = { workspaceId: workspace.id };
   const [seasons, clubs, competitions, matches, videos, momentTypes, subMomentTypes, moments, subMoments] = await Promise.all([
-    prisma.season.findMany(), prisma.club.findMany(), prisma.competition.findMany({ include: { clubs: { select: { id: true } } } }), prisma.match.findMany(), prisma.video.findMany(), prisma.momentType.findMany(), prisma.subMomentType.findMany(), prisma.moment.findMany(), prisma.subMoment.findMany()
+    prisma.season.findMany({ where: matchWhere }),
+    prisma.club.findMany({ where: matchWhere }),
+    prisma.competition.findMany({ where: matchWhere, include: { clubs: { select: { id: true } } } }),
+    prisma.match.findMany({ where: matchWhere }),
+    prisma.video.findMany({ where: { match: matchWhere } }),
+    prisma.momentType.findMany({ where: matchWhere }),
+    prisma.subMomentType.findMany({ where: matchWhere }),
+    prisma.moment.findMany({ where: { match: matchWhere } }),
+    prisma.subMoment.findMany({ where: { moment: { match: matchWhere } } })
   ]);
-  const payload = { version: 1, exportedAt: new Date().toISOString(), seasons, clubs, competitions: competitions.map(({ clubs: linked, ...item }) => ({ ...item, clubIds: linked.map((club) => club.id) })), matches, videos, momentTypes, subMomentTypes, moments, subMoments };
+  const payload = { version: 2, team: workspace.name, exportedAt: new Date().toISOString(), seasons, clubs, competitions: competitions.map(({ clubs: linked, ...item }) => ({ ...item, clubIds: linked.map((club) => club.id) })), matches, videos, momentTypes, subMomentTypes, moments, subMoments };
   const body = JSON.stringify(payload, (_key, value) => typeof value === "bigint" ? value.toString() : value, 2);
   const date = new Date().toISOString().slice(0, 10);
-  return new Response(body, { headers: { "Content-Type": "application/json; charset=utf-8", "Content-Disposition": `attachment; filename="feirense-analysis-backup-${date}.json"`, "Cache-Control": "no-store" } });
+  const safeTeam = workspace.name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-|-$/g, "") || "team";
+  return new Response(body, { headers: { "Content-Type": "application/json; charset=utf-8", "Content-Disposition": `attachment; filename="${safeTeam}-analysis-backup-${date}.json"`, "Cache-Control": "no-store" } });
 }

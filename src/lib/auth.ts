@@ -33,7 +33,7 @@ export async function ensureInitialAdmin() {
   validatePassword(password);
   await prisma.user.create({
     data: {
-      name: process.env.INITIAL_ADMIN_NAME?.trim() || "Feirense Analyst",
+      name: process.env.INITIAL_ADMIN_NAME?.trim() || "Team Analyst",
       username,
       passwordHash: hashPassword(password),
       mustChangePassword: true,
@@ -42,7 +42,7 @@ export async function ensureInitialAdmin() {
   });
 }
 
-export type SessionPayload = { userId: string; username: string; role: string; mustChangePassword: boolean; exp: number };
+export type SessionPayload = { userId: string; username: string; role: string; mustChangePassword: boolean; needsOnboarding?: boolean; exp: number };
 
 export function createSessionToken(payload: Omit<SessionPayload, "exp">) {
   const data = Buffer.from(JSON.stringify({ ...payload, exp: Date.now() + 1000 * 60 * 60 * 24 * 7 })).toString("base64url");
@@ -66,6 +66,20 @@ export function readSessionToken(token?: string | null): SessionPayload | null {
 
 export async function currentSession() {
   return readSessionToken((await cookies()).get(SESSION_COOKIE)?.value);
+}
+
+export async function requireAccount() {
+  const session = await currentSession();
+  if (!session) throw new Error("Invalid or expired session.");
+  const user = await prisma.user.findUnique({ where: { id: session.userId }, include: { workspace: true } });
+  if (!user) throw new Error("User account no longer exists.");
+  return { session, user, workspace: user.workspace };
+}
+
+export async function requireWorkspace() {
+  const account = await requireAccount();
+  if (!account.workspace) throw new Error("Complete the team setup before continuing.");
+  return { ...account, workspace: account.workspace };
 }
 
 export function validatePassword(password: string) {
