@@ -26,14 +26,15 @@ export function verifyPassword(password: string, stored: string) {
 
 export async function ensureInitialAdmin() {
   if (await prisma.user.count()) return;
-  const email = process.env.INITIAL_ADMIN_EMAIL?.trim().toLowerCase();
+  const legacyEmail = process.env.INITIAL_ADMIN_EMAIL?.trim().toLowerCase();
+  const username = (process.env.INITIAL_ADMIN_USERNAME?.trim() || legacyEmail?.split("@")[0] || "").toLowerCase();
   const password = process.env.INITIAL_ADMIN_PASSWORD;
-  if (!email || !password) throw new Error("Initial administrator credentials are not configured.");
+  if (!username || !password) throw new Error("Initial administrator credentials are not configured.");
   validatePassword(password);
   await prisma.user.create({
     data: {
       name: process.env.INITIAL_ADMIN_NAME?.trim() || "Feirense Analyst",
-      email,
+      username,
       passwordHash: hashPassword(password),
       mustChangePassword: true,
       role: "admin"
@@ -41,7 +42,7 @@ export async function ensureInitialAdmin() {
   });
 }
 
-export type SessionPayload = { userId: string; email: string; role: string; mustChangePassword: boolean; exp: number };
+export type SessionPayload = { userId: string; username: string; role: string; mustChangePassword: boolean; exp: number };
 
 export function createSessionToken(payload: Omit<SessionPayload, "exp">) {
   const data = Buffer.from(JSON.stringify({ ...payload, exp: Date.now() + 1000 * 60 * 60 * 24 * 7 })).toString("base64url");
