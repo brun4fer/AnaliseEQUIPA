@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, ChevronLeft, ChevronRight, Crosshair, FileVideo, Goal, Loader2, MapPin, Pause, Pencil, Play, Save, Trash2, Upload, X } from "lucide-react";
+import { ArrowLeft, ChevronLeft, ChevronRight, Crosshair, FileVideo, Goal, Loader2, MapPin, Pause, Pencil, Play, Save, Settings2, Trash2, Upload, X } from "lucide-react";
 
 import { Coordinate, GoalSurface, PitchSurface } from "@/components/analysis-surfaces";
 import { Badge, Button, Label, Panel, Select, TextArea } from "@/components/ui";
@@ -212,6 +212,32 @@ export function SubmomentWorkspace({ matchId }: { matchId: string }) {
     {notice ? <div className="rounded-xl border border-leaf-400/25 bg-leaf-400/10 px-4 py-3 text-sm text-emerald-100">{notice}</div> : null}
 
     <Panel className="grid gap-4 p-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-end"><label className="grid gap-2"><Label>Filter moments</Label><Select value={filterTypeId} onChange={(event) => changeFilter(event.target.value)}><option value="">All moments ({match.moments.length})</option>{settings.momentTypes.map((type) => <option key={type.id} value={type.id}>{type.name} ({match.moments.filter((moment) => moment.momentTypeId === type.id).length})</option>)}</Select></label><Badge>{selectedIndex >= 0 ? `${selectedIndex + 1} / ${moments.length}` : `0 / ${moments.length}`}</Badge></Panel>
+
+    <Panel className="p-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <Label>Identification</Label>
+          <h2 className="mt-1 text-base font-bold text-white">Submoment actions</h2>
+          <p className="mt-1 text-xs text-slate-500">Choose the action first, then mark its pitch or goal location.</p>
+        </div>
+        <Link href="/settings"><Button size="sm"><Settings2 size={14} />Manage actions</Button></Link>
+      </div>
+      <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+        {settings.subMomentTypes.filter((type) => type.active).map((type) => (
+          <button
+            key={type.id}
+            type="button"
+            onClick={() => chooseSubMomentType(type.id)}
+            className={`flex min-h-12 items-center gap-3 rounded-lg border px-3 py-2 text-left text-sm font-semibold transition ${selectedSubMomentTypeId === type.id ? "text-white shadow-lg" : "border-white/10 bg-white/[.04] text-slate-300 hover:border-white/20 hover:bg-white/[.08]"}`}
+            style={selectedSubMomentTypeId === type.id ? { backgroundColor: `${type.color}35`, borderColor: type.color } : undefined}
+          >
+            <span className="h-3 w-3 shrink-0 rounded-full" style={{ backgroundColor: type.color }} />
+            <span className="min-w-0 flex-1 truncate">{type.name}</span>
+            {type.defaultShortcut ? <kbd className="rounded border border-white/10 bg-black/20 px-2 py-1 font-mono text-[10px] text-slate-300">{type.defaultShortcut.toUpperCase()}</kbd> : null}
+          </button>
+        ))}
+      </div>
+    </Panel>
 
     <div className="submoment-layout grid items-start gap-4 min-[1248px]:grid-cols-[18rem_minmax(30rem,1fr)_25rem]">
       <Panel className="max-h-[72vh] overflow-y-auto xl:sticky xl:top-24"><div className="sticky top-0 z-10 border-b border-white/10 bg-ink-900 px-4 py-3 text-[10px] font-bold uppercase tracking-[.18em] text-slate-500">Moments ({moments.length})</div>{moments.length === 0 ? <p className="p-4 text-sm text-slate-500">There are no moments in this filter.</p> : moments.map((moment, index) => <button key={moment.id} onClick={() => selectMoment(moment)} className={`flex w-full items-center gap-3 border-b border-white/[.06] p-3 text-left transition hover:bg-white/[.06] ${selectedMoment?.id === moment.id ? "bg-leaf-400/10" : ""}`}><span className="font-mono text-xs text-slate-600">{index + 1}</span><span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: moment.momentType.color }} /><span className="min-w-0 flex-1"><span className="block truncate text-sm font-semibold text-white">{moment.momentType.name}</span><span className="font-mono text-xs text-slate-500">{formatTime(moment.startTimeSeconds)} – {formatTime(moment.endTimeSeconds)}</span></span><Badge>{moment.subMoments.length}</Badge></button>)}</Panel>
