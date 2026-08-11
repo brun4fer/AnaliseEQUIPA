@@ -14,12 +14,12 @@ function clickCoordinate(event: React.MouseEvent<HTMLElement>): Coordinate {
   };
 }
 
-function Markers({ points }: { points: SurfacePoint[] }) {
+function Markers({ points, onSelect }: { points: SurfacePoint[]; onSelect?: (id: string) => void }) {
   return points.map((point) => <span
     key={point.id}
     aria-label={[point.label, ...(point.details || [])].filter(Boolean).join(", ")}
-    onClick={(event) => event.stopPropagation()}
-    className={cn("group absolute z-10 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 cursor-help rounded-full border-2 border-white shadow-[0_2px_10px_rgba(0,0,0,.7)] hover:z-30", point.active && "h-5 w-5 ring-4 ring-white/25")}
+    onClick={(event) => { event.stopPropagation(); onSelect?.(point.id); }}
+    className={cn("group absolute z-10 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 cursor-help rounded-full border-2 border-white shadow-[0_2px_10px_rgba(0,0,0,.7)] hover:z-30", onSelect && "cursor-pointer", point.active && "h-5 w-5 ring-4 ring-white/25")}
     style={{ left: `${point.x}%`, top: `${point.y}%`, backgroundColor: point.color }}
   >
     {point.label ? <span className={cn(
@@ -33,7 +33,7 @@ function Markers({ points }: { points: SurfacePoint[] }) {
   </span>);
 }
 
-export function PitchSurface({ points = [], value, color = "#2dd66f", direction = "left_to_right", directionLabel, onChange, className }: { points?: SurfacePoint[]; value?: Coordinate | null; color?: string; direction?: AttackDirection | null; directionLabel?: string; onChange?: (point: Coordinate) => void; className?: string }) {
+export function PitchSurface({ points = [], value, color = "#2dd66f", direction = "left_to_right", directionLabel, onChange, onPointSelect, className }: { points?: SurfacePoint[]; value?: Coordinate | null; color?: string; direction?: AttackDirection | null; directionLabel?: string; onChange?: (point: Coordinate) => void; onPointSelect?: (id: string) => void; className?: string }) {
   const selected = value ? [{ id: "selected", ...value, color, active: true }] : [];
   return <button type="button" aria-disabled={!onChange} onClick={(event) => onChange?.(clickCoordinate(event))} className={cn("relative block aspect-[1.55/1] w-full overflow-hidden rounded-xl border-2 border-white/25 bg-[#167641] text-left shadow-inner", onChange ? "cursor-crosshair" : "cursor-default", className)}>
     <svg viewBox="0 0 105 68" className="absolute inset-0 h-full w-full" aria-hidden="true">
@@ -51,12 +51,12 @@ export function PitchSurface({ points = [], value, color = "#2dd66f", direction 
       {[26.25, 78.75].map((x) => <line key={x} x1={x} y1="1" x2={x} y2="67" stroke="rgba(255,255,255,.18)" strokeWidth=".35" strokeDasharray="1.5 1.5" />)}
       {[22.67, 45.33].map((y) => <line key={y} x1="1" y1={y} x2="104" y2={y} stroke="rgba(255,255,255,.18)" strokeWidth=".35" strokeDasharray="1.5 1.5" />)}
     </svg>
-    <Markers points={[...points, ...selected]} />
+    <Markers points={[...points, ...selected]} onSelect={onPointSelect} />
     {direction ? <span className={cn("absolute top-2 rounded bg-black/45 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-white", direction === "right_to_left" ? "left-3" : "right-3")}>{directionLabel || "Attack"} {direction === "right_to_left" ? "←" : "→"}</span> : null}
   </button>;
 }
 
-export function GoalSurface({ points = [], value, color = "#facc15", onChange, className }: { points?: SurfacePoint[]; value?: Coordinate | null; color?: string; onChange?: (point: Coordinate) => void; className?: string }) {
+export function GoalSurface({ points = [], value, color = "#facc15", onChange, onPointSelect, className }: { points?: SurfacePoint[]; value?: Coordinate | null; color?: string; onChange?: (point: Coordinate) => void; onPointSelect?: (id: string) => void; className?: string }) {
   const selected = value ? [{ id: "selected-goal", ...value, color, active: true }] : [];
   return <button type="button" aria-disabled={!onChange} onClick={(event) => onChange?.(clickCoordinate(event))} className={cn("relative block aspect-[2/1] w-full overflow-hidden rounded-xl border border-white/20 bg-gradient-to-b from-slate-800 to-slate-950", onChange ? "cursor-crosshair" : "cursor-default", className)}>
     <svg viewBox="0 0 100 50" className="absolute inset-0 h-full w-full" aria-hidden="true">
@@ -65,6 +65,6 @@ export function GoalSurface({ points = [], value, color = "#facc15", onChange, c
       {Array.from({ length: 5 }, (_, index) => <line key={`h-${index}`} x1="10" y1={8 + index * 9} x2="90" y2={8 + index * 9} stroke="rgba(255,255,255,.18)" strokeWidth=".5" />)}
       <line x1="50" y1="8" x2="50" y2="44" stroke="rgba(255,255,255,.4)" strokeDasharray="2 2" />
     </svg>
-    <Markers points={[...points, ...selected]} />
+    <Markers points={[...points, ...selected]} onSelect={onPointSelect} />
   </button>;
 }

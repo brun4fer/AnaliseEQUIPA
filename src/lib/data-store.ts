@@ -83,8 +83,8 @@ export async function createMatch(input: Record<string, unknown>) {
       venue: optionalString(input.venue),
       notes: optionalString(input.notes),
       matchDate: input.matchDate ? new Date(String(input.matchDate)) : null,
-      firstHalfAttackDirection: String(input.firstHalfAttackDirection || "left_to_right"),
-      secondHalfAttackDirection: String(input.secondHalfAttackDirection || "right_to_left")
+      firstHalfAttackDirection: "left_to_right",
+      secondHalfAttackDirection: "right_to_left"
     },
     include: matchInclude
   });
@@ -130,8 +130,8 @@ export async function updateMatch(matchId: string, input: Record<string, unknown
   if (input.venue !== undefined) updateData.venue = optionalString(input.venue);
   if (input.notes !== undefined) updateData.notes = optionalString(input.notes);
   if (input.matchDate !== undefined) updateData.matchDate = input.matchDate ? validDate(input.matchDate) : null;
-  if (input.firstHalfAttackDirection !== undefined) updateData.firstHalfAttackDirection = validDirection(input.firstHalfAttackDirection);
-  if (input.secondHalfAttackDirection !== undefined) updateData.secondHalfAttackDirection = validDirection(input.secondHalfAttackDirection);
+  updateData.firstHalfAttackDirection = "left_to_right";
+  updateData.secondHalfAttackDirection = "right_to_left";
 
   const match = await prisma.$transaction(async (tx) => {
     await tx.match.update({ where: { id: matchId }, data: updateData });
@@ -212,7 +212,17 @@ export async function createMoment(matchId: string, input: Record<string, unknow
 export async function updateMoment(momentId: string, input: Record<string, unknown>) {
   const { workspace } = await requireWorkspace();
   const current = await prisma.moment.findFirstOrThrow({ where: { id: momentId, match: { workspaceId: workspace.id } }, include: { match: true } });
-  if (input.momentTypeId !== undefined) await prisma.momentType.findFirstOrThrow({ where: { id: String(input.momentTypeId), workspaceId: workspace.id }, select: { id: true } });
+  if (input.momentTypeId !== undefined) {
+    const nextType = await prisma.momentType.findFirstOrThrow({
+      where: { id: String(input.momentTypeId), workspaceId: workspace.id },
+      select: { allowedSubmoments: { select: { id: true } } }
+    });
+    const existingSubmomentTypes = await prisma.subMoment.findMany({ where: { momentId }, select: { subMomentTypeId: true }, distinct: ["subMomentTypeId"] });
+    const allowedIds = new Set(nextType.allowedSubmoments.map((type) => type.id));
+    if (existingSubmomentTypes.some((type) => !allowedIds.has(type.subMomentTypeId))) {
+      throw new Error("This moment already contains submoments that are not available for the selected moment type.");
+    }
+  }
   const start = input.startTimeSeconds === undefined ? current.startTimeSeconds : Number(input.startTimeSeconds);
   const end = input.endTimeSeconds === undefined ? current.endTimeSeconds : Number(input.endTimeSeconds);
   if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) throw new Error("Invalid moment interval.");
@@ -233,8 +243,12 @@ export async function updateMoment(momentId: string, input: Record<string, unkno
 
 export async function createSubMoment(momentId: string, input: Record<string, unknown>) {
   const { workspace } = await requireWorkspace();
-  await prisma.moment.findFirstOrThrow({ where: { id: momentId, match: { workspaceId: workspace.id } }, select: { id: true } });
+  const moment = await prisma.moment.findFirstOrThrow({
+    where: { id: momentId, match: { workspaceId: workspace.id } },
+    select: { id: true, momentType: { select: { allowedSubmoments: { select: { id: true } } } } }
+  });
   const type = await prisma.subMomentType.findFirstOrThrow({ where: { id: String(input.subMomentTypeId), workspaceId: workspace.id } });
+  if (!moment.momentType.allowedSubmoments.some((allowed) => allowed.id === type.id)) throw new Error("This submoment is not available for the selected moment.");
   const fieldX = optionalCoordinate(input.fieldX);
   const fieldY = optionalCoordinate(input.fieldY);
   const goalX = optionalCoordinate(input.goalX);
@@ -260,17 +274,29 @@ export async function createSubMoment(momentId: string, input: Record<string, un
 
 export async function updateSubMoment(subMomentId: string, input: Record<string, unknown>) {
   const { workspace } = await requireWorkspace();
-  await prisma.subMoment.findFirstOrThrow({ where: { id: subMomentId, moment: { match: { workspaceId: workspace.id } } }, select: { id: true } });
-  if (input.subMomentTypeId !== undefined) await prisma.subMomentType.findFirstOrThrow({ where: { id: String(input.subMomentTypeId), workspaceId: workspace.id }, select: { id: true } });
+  const current = await prisma.subMoment.findFirstOrThrow({
+    where: { id: subMomentId, moment: { match: { workspaceId: workspace.id } } },
+    include: { subMomentType: true, moment: { select: { momentType: { select: { allowedSubmoments: { select: { id: true } } } } } } }
+  });
+  const nextType = input.subMomentTypeId === undefined
+    ? current.subMomentType
+    : await prisma.subMomentType.findFirstOrThrow({ where: { id: String(input.subMomentTypeId), workspaceId: workspace.id } });
+  if (!current.moment.momentType.allowedSubmoments.some((allowed) => allowed.id === nextType.id)) throw new Error("This submoment is not available for the selected moment.");
+  const nextFieldX = input.fieldX === undefined ? current.fieldX : optionalCoordinate(input.fieldX);
+  const nextFieldY = input.fieldY === undefined ? current.fieldY : optionalCoordinate(input.fieldY);
+  const nextGoalX = input.goalX === undefined ? current.goalX : optionalCoordinate(input.goalX);
+  const nextGoalY = input.goalY === undefined ? current.goalY : optionalCoordinate(input.goalY);
+  if (nextType.requiresFieldLocation && (nextFieldX === null || nextFieldY === null)) throw new Error("Mark the occurrence on the field.");
+  if (nextType.requiresGoalLocation && (nextGoalX === null || nextGoalY === null)) throw new Error("Mark the destination on the goal.");
   return prisma.subMoment.update({
     where: { id: subMomentId },
     data: {
       subMomentTypeId: input.subMomentTypeId === undefined ? undefined : String(input.subMomentTypeId),
       timeSeconds: input.timeSeconds === undefined ? undefined : optionalNumber(input.timeSeconds),
-      fieldX: input.fieldX === undefined ? undefined : optionalCoordinate(input.fieldX),
-      fieldY: input.fieldY === undefined ? undefined : optionalCoordinate(input.fieldY),
-      goalX: input.goalX === undefined ? undefined : optionalCoordinate(input.goalX),
-      goalY: input.goalY === undefined ? undefined : optionalCoordinate(input.goalY),
+      fieldX: input.fieldX === undefined ? undefined : nextFieldX,
+      fieldY: input.fieldY === undefined ? undefined : nextFieldY,
+      goalX: input.goalX === undefined ? undefined : nextGoalX,
+      goalY: input.goalY === undefined ? undefined : nextGoalY,
       foot: input.foot === undefined ? undefined : optionalString(input.foot),
       notes: input.notes === undefined ? undefined : optionalString(input.notes),
       outcome: input.outcome === undefined ? undefined : optionalString(input.outcome)
@@ -297,7 +323,10 @@ export async function getMapPoints() {
     matchId: point.moment.matchId,
     matchTitle: point.moment.match.title,
     momentId: point.momentId,
+    momentTypeId: point.moment.momentTypeId,
     momentTypeName: point.moment.momentType.name,
+    momentStartTimeSeconds: point.moment.startTimeSeconds,
+    momentEndTimeSeconds: point.moment.endTimeSeconds,
     subMomentTypeId: point.subMomentTypeId,
     subMomentTypeName: point.subMomentType.name,
     color: point.subMomentType.color,
@@ -315,6 +344,9 @@ export async function getMapPoints() {
 
 export async function saveMomentType(input: Record<string, unknown>, id?: string) {
   const { workspace } = await requireWorkspace();
+  const allowedSubmomentIds = Array.isArray(input.allowedSubmomentIds) ? [...new Set(input.allowedSubmomentIds.map(String))] : [];
+  const allowedCount = await prisma.subMomentType.count({ where: { id: { in: allowedSubmomentIds }, workspaceId: workspace.id } });
+  if (allowedCount !== allowedSubmomentIds.length) throw new Error("One or more selected submoments are invalid.");
   const data = {
     name: String(input.name || "").trim(),
     code: String(input.code || "").trim().toUpperCase(),
@@ -326,9 +358,24 @@ export async function saveMomentType(input: Record<string, unknown>, id?: string
   await validateShortcut(workspace.id, data.defaultShortcut, id);
   if (id) {
     await prisma.momentType.findFirstOrThrow({ where: { id, workspaceId: workspace.id }, select: { id: true } });
-    return prisma.momentType.update({ where: { id }, data });
+    const usedSubmomentTypes = await prisma.subMoment.findMany({
+      where: { moment: { momentTypeId: id, match: { workspaceId: workspace.id } } },
+      select: { subMomentTypeId: true },
+      distinct: ["subMomentTypeId"]
+    });
+    if (usedSubmomentTypes.some((type) => !allowedSubmomentIds.includes(type.subMomentTypeId))) {
+      throw new Error("Keep the submoments already used by this moment type associated with it.");
+    }
+    return prisma.momentType.update({
+      where: { id },
+      data: { ...data, allowedSubmoments: { set: allowedSubmomentIds.map((submomentId) => ({ id: submomentId })) } },
+      include: { allowedSubmoments: true }
+    });
   }
-  return prisma.momentType.create({ data: { ...data, workspaceId: workspace.id } });
+  return prisma.momentType.create({
+    data: { ...data, workspaceId: workspace.id, allowedSubmoments: { connect: allowedSubmomentIds.map((submomentId) => ({ id: submomentId })) } },
+    include: { allowedSubmoments: true }
+  });
 }
 
 export async function saveSubMomentType(input: Record<string, unknown>, id?: string) {
@@ -400,12 +447,6 @@ function validDate(value: unknown) {
   const date = new Date(String(value));
   if (Number.isNaN(date.getTime())) throw new Error("Invalid match date.");
   return date;
-}
-
-function validDirection(value: unknown) {
-  const direction = String(value);
-  if (direction !== "left_to_right" && direction !== "right_to_left") throw new Error("Invalid attack direction.");
-  return direction;
 }
 
 async function validateShortcut(workspaceId: string, shortcut: string | null, currentId?: string) {

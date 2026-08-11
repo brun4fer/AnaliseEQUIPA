@@ -35,14 +35,15 @@ video { background: #020808; }
   background-size: 12.5% 100%, 100% 25%, 100% 100%;
 }
 
-@media (max-width: 1119px) {
-  .analysis-layout > :nth-child(1) { order: 2; }
-  .analysis-layout > :nth-child(2) { order: 1; }
-  .analysis-layout > :nth-child(3) { order: 3; }
-}
+@media (max-width: 767px) {
+  .analysis-layout,
+  .submoment-layout,
+  .maps-surfaces {
+    font-size: clamp(.62rem, 2vw, .875rem);
+  }
 
-@media (max-width: 1247px) {
-  .submoment-layout > :nth-child(1) { order: 2; }
-  .submoment-layout > :nth-child(2) { order: 1; }
-  .submoment-layout > :nth-child(3) { order: 3; }
+  .analysis-layout button,
+  .submoment-layout button {
+    min-width: 0;
+  }
 }

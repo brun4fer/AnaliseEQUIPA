@@ -7,7 +7,7 @@ import { Badge, Button, Input, Label, Panel } from "@/components/ui";
 import type { MomentTypeRecord, SettingsPayload, SubMomentTypeRecord } from "@/lib/domain";
 import { apiFetch } from "@/lib/http";
 
-const emptyMoment = { name: "", code: "", color: "#2dd66f", defaultShortcut: "" };
+const emptyMoment = { name: "", code: "", color: "#2dd66f", defaultShortcut: "", allowedSubmomentIds: [] as string[] };
 const emptySubmoment = {
   name: "",
   code: "",
@@ -88,7 +88,11 @@ export function SettingsClient() {
       setSettings(
         kind === "moment"
           ? { ...settings, momentTypes: settings.momentTypes.filter((item) => item.id !== id) }
-          : { ...settings, subMomentTypes: settings.subMomentTypes.filter((item) => item.id !== id) }
+          : {
+              ...settings,
+              subMomentTypes: settings.subMomentTypes.filter((item) => item.id !== id),
+              momentTypes: settings.momentTypes.map((item) => ({ ...item, allowedSubmoments: item.allowedSubmoments?.filter((submoment) => submoment.id !== id) }))
+            }
       );
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not delete this type.");
@@ -101,8 +105,18 @@ export function SettingsClient() {
       name: type.name,
       code: type.code,
       color: type.color,
-      defaultShortcut: type.defaultShortcut || ""
+      defaultShortcut: type.defaultShortcut || "",
+      allowedSubmomentIds: type.allowedSubmoments?.map((submoment) => submoment.id) || []
     });
+  }
+
+  function toggleAllowedSubmoment(id: string) {
+    setMomentForm((current) => ({
+      ...current,
+      allowedSubmomentIds: current.allowedSubmomentIds.includes(id)
+        ? current.allowedSubmomentIds.filter((item) => item !== id)
+        : [...current.allowedSubmomentIds, id]
+    }));
   }
 
   function editSubmoment(type: SubMomentTypeRecord) {
@@ -204,12 +218,13 @@ export function SettingsClient() {
                     <span className="text-xs text-slate-500">{type.code}</span>
                   </span>
                   {type.defaultShortcut ? <Badge>{type.defaultShortcut.toUpperCase()}</Badge> : null}
+                  <Badge>{type.allowedSubmoments?.length || 0} sub.</Badge>
                   <Button size="sm" onClick={() => editMoment(type)}><Pencil size={14} />Edit</Button>
                   <Button size="sm" variant="danger" onClick={() => void remove("moment", type.id, type.name)}><Trash2 size={14} />Delete</Button>
                 </div>
               ))}
             </div>
-            <form onSubmit={saveMoment} className="border-t border-white/10 bg-black/10 p-4">
+            <form onSubmit={saveMoment} className="space-y-4 border-t border-white/10 bg-black/10 p-4">
               <Label>{editingMomentId ? "Edit moment" : "Add moment"}</Label>
               <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(12rem,1fr)_8rem_5rem_6rem_auto]">
                 <Input placeholder="Name" value={momentForm.name} onChange={(event) => setMomentForm({ ...momentForm, name: event.target.value })} required />
@@ -219,6 +234,16 @@ export function SettingsClient() {
                 <div className="flex gap-2">
                   <Button variant="primary" size="icon" aria-label={editingMomentId ? "Save moment" : "Add moment"}>{editingMomentId ? <Save size={15} /> : <Plus size={15} />}</Button>
                   {editingMomentId ? <Button type="button" size="icon" aria-label="Cancel edit" onClick={cancelMomentEdit}><X size={15} /></Button> : null}
+                </div>
+              </div>
+              <div>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div><Label>Available submoments</Label><p className="mt-1 text-xs text-slate-500">Only these actions will appear after selecting this moment.</p></div>
+                  <Button type="button" size="sm" onClick={() => setMomentForm((current) => ({ ...current, allowedSubmomentIds: current.allowedSubmomentIds.length === settings.subMomentTypes.length ? [] : settings.subMomentTypes.map((item) => item.id) }))}>{momentForm.allowedSubmomentIds.length === settings.subMomentTypes.length ? "Clear" : "Select all"}</Button>
+                </div>
+                <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                  {settings.subMomentTypes.map((submoment) => <label key={submoment.id} className="flex cursor-pointer items-center gap-3 rounded-lg border border-white/10 bg-white/[.035] px-3 py-2 text-sm text-slate-200"><input type="checkbox" checked={momentForm.allowedSubmomentIds.includes(submoment.id)} onChange={() => toggleAllowedSubmoment(submoment.id)} className="h-4 w-4 accent-emerald-400" /><span className="h-3 w-3 rounded-full" style={{ backgroundColor: submoment.color }} /><span className="min-w-0 flex-1 truncate">{submoment.name}</span></label>)}
+                  {settings.subMomentTypes.length === 0 ? <p className="text-xs text-amber-200/70">Create submoments first, then associate them with this moment.</p> : null}
                 </div>
               </div>
             </form>

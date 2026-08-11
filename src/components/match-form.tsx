@@ -11,7 +11,7 @@ import { apiFetch } from "@/lib/http";
 
 export function MatchForm() {
   const router = useRouter();
-  const [form, setForm] = useState({ seasonId: "", competitionId: "", opponentClubId: "", roundName: "", matchDate: "", venue: "", notes: "", firstHalfAttackDirection: "left_to_right", secondHalfAttackDirection: "right_to_left" });
+  const [form, setForm] = useState({ seasonId: "", competitionId: "", opponentClubId: "", roundName: "", matchDate: "", venue: "", notes: "" });
   const [seasons, setSeasons] = useState<MaintenanceRecord[]>([]);
   const [competitions, setCompetitions] = useState<MaintenanceRecord[]>([]);
   const [clubs, setClubs] = useState<MaintenanceRecord[]>([]);
@@ -58,8 +58,6 @@ export function MatchForm() {
       <Field label="Round"><Input value={form.roundName} onChange={(event) => update("roundName", event.target.value)} /></Field>
       <Field label="Date"><Input type="date" value={form.matchDate} onChange={(event) => update("matchDate", event.target.value)} /></Field>
       <Field label="Venue"><Input value={form.venue} onChange={(event) => update("venue", event.target.value)} /></Field>
-      <Field label="Attack direction — first half"><Select value={form.firstHalfAttackDirection} onChange={(event) => update("firstHalfAttackDirection", event.target.value)}><option value="left_to_right">Left → right</option><option value="right_to_left">Right → left</option></Select></Field>
-      <Field label="Attack direction — second half"><Select value={form.secondHalfAttackDirection} onChange={(event) => update("secondHalfAttackDirection", event.target.value)}><option value="right_to_left">Right → left</option><option value="left_to_right">Left → right</option></Select></Field>
       <Field label="Notes" className="md:col-span-2"><TextArea value={form.notes} onChange={(event) => update("notes", event.target.value)} /></Field>
       <div className="flex justify-end gap-2 md:col-span-2"><Link href="/"><Button type="button">Cancel</Button></Link><Button variant="primary" disabled={saving || !form.seasonId || !form.competitionId || !form.opponentClubId}><Save size={16} />{saving ? "Saving…" : "Create match"}</Button></div>
     </form>}</Panel>

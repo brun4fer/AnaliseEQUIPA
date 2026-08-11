@@ -20,9 +20,7 @@ export function MatchEditDialog({ match, onSave, onDelete, onClose }: {
     roundName: match.roundName || "",
     matchDate: match.matchDate?.slice(0, 10) || "",
     venue: match.venue || "",
-    notes: match.notes || "",
-    firstHalfAttackDirection: match.firstHalfAttackDirection,
-    secondHalfAttackDirection: match.secondHalfAttackDirection
+    notes: match.notes || ""
   });
   const [seasons, setSeasons] = useState<MaintenanceRecord[]>([]);
   const [competitions, setCompetitions] = useState<MaintenanceRecord[]>([]);
@@ -64,8 +62,6 @@ export function MatchEditDialog({ match, onSave, onDelete, onClose }: {
     <Field label="Round"><Input value={form.roundName} onChange={(event) => update("roundName", event.target.value)} /></Field>
     <Field label="Date"><Input type="date" value={form.matchDate} onChange={(event) => update("matchDate", event.target.value)} /></Field>
     <Field label="Venue"><Input value={form.venue} onChange={(event) => update("venue", event.target.value)} /></Field>
-    <Field label="Attack direction — first half"><Select value={form.firstHalfAttackDirection} onChange={(event) => update("firstHalfAttackDirection", event.target.value)}><option value="left_to_right">Left → right</option><option value="right_to_left">Right → left</option></Select></Field>
-    <Field label="Attack direction — second half"><Select value={form.secondHalfAttackDirection} onChange={(event) => update("secondHalfAttackDirection", event.target.value)}><option value="right_to_left">Right → left</option><option value="left_to_right">Left → right</option></Select></Field>
     <Field label="Notes" className="md:col-span-2"><TextArea value={form.notes} onChange={(event) => update("notes", event.target.value)} /></Field>
     {error ? <div className="rounded-lg border border-red-400/25 bg-red-500/10 p-3 text-sm text-red-100 md:col-span-2">{error}</div> : null}
     <div className="flex flex-wrap justify-between gap-2 md:col-span-2"><Button type="button" variant="danger" disabled={busy} onClick={() => void remove()}><Trash2 size={15} />Delete match</Button><div className="flex gap-2"><Button type="button" onClick={onClose}>Cancel</Button><Button variant="primary" disabled={busy}>{busy ? "Saving…" : "Save changes"}</Button></div></div>

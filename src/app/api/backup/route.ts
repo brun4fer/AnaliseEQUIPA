@@ -10,12 +10,12 @@ export async function GET() {
     prisma.competition.findMany({ where: matchWhere, include: { clubs: { select: { id: true } } } }),
     prisma.match.findMany({ where: matchWhere }),
     prisma.video.findMany({ where: { match: matchWhere } }),
-    prisma.momentType.findMany({ where: matchWhere }),
+    prisma.momentType.findMany({ where: matchWhere, include: { allowedSubmoments: { select: { id: true } } } }),
     prisma.subMomentType.findMany({ where: matchWhere }),
     prisma.moment.findMany({ where: { match: matchWhere } }),
     prisma.subMoment.findMany({ where: { moment: { match: matchWhere } } })
   ]);
-  const payload = { version: 2, team: workspace.name, exportedAt: new Date().toISOString(), seasons, clubs, competitions: competitions.map(({ clubs: linked, ...item }) => ({ ...item, clubIds: linked.map((club) => club.id) })), matches, videos, momentTypes, subMomentTypes, moments, subMoments };
+  const payload = { version: 3, team: workspace.name, exportedAt: new Date().toISOString(), seasons, clubs, competitions: competitions.map(({ clubs: linked, ...item }) => ({ ...item, clubIds: linked.map((club) => club.id) })), matches, videos, momentTypes: momentTypes.map(({ allowedSubmoments, ...item }) => ({ ...item, allowedSubmomentIds: allowedSubmoments.map((submoment) => submoment.id) })), subMomentTypes, moments, subMoments };
   const body = JSON.stringify(payload, (_key, value) => typeof value === "bigint" ? value.toString() : value, 2);
   const date = new Date().toISOString().slice(0, 10);
   const safeTeam = workspace.name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-|-$/g, "") || "team";

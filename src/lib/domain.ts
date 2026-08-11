@@ -117,7 +117,10 @@ export type MapPoint = {
   matchId: string;
   matchTitle: string;
   momentId: string;
+  momentTypeId: string;
   momentTypeName: string;
+  momentStartTimeSeconds: number;
+  momentEndTimeSeconds: number;
   subMomentTypeId: string;
   subMomentTypeName: string;
   color: string;

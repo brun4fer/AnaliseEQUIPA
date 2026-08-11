@@ -1,25 +1,37 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { Filter, Loader2, MapPinned, Target } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { FileVideo, Filter, Loader2, MapPinned, Target, Upload } from "lucide-react";
 
 import { GoalSurface, PitchSurface } from "@/components/analysis-surfaces";
-import { Badge, Label, Panel, Select } from "@/components/ui";
+import { Badge, Button, Label, Panel, Select } from "@/components/ui";
 import type { MapPoint, MatchSummary, SettingsPayload } from "@/lib/domain";
 import { apiFetch } from "@/lib/http";
-import { normalizeFieldX, type AttackDirection } from "@/lib/match-periods";
+import { getRememberedMatchVideo, rememberMatchVideo } from "@/lib/local-video-store";
+import type { AttackDirection } from "@/lib/match-periods";
+import { matchPeriodLabel } from "@/lib/match-periods";
 import { formatTime } from "@/lib/time";
 
+type MapPeriod = "both" | "first_half" | "second_half";
+
 export function MapsDashboard() {
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const objectUrlRef = useRef<string | null>(null);
+  const videoRequestRef = useRef(0);
   const [points, setPoints] = useState<MapPoint[]>([]);
   const [matches, setMatches] = useState<MatchSummary[]>([]);
   const [settings, setSettings] = useState<SettingsPayload | null>(null);
   const [matchId, setMatchId] = useState("");
-  const [typeId, setTypeId] = useState("");
-  const [period, setPeriod] = useState("identified");
-  const [orientation, setOrientation] = useState<"normalized" | "original">("normalized");
+  const [momentTypeId, setMomentTypeId] = useState("");
+  const [submomentTypeId, setSubmomentTypeId] = useState("");
+  const [period, setPeriod] = useState<MapPeriod>("both");
+  const [selectedPointId, setSelectedPointId] = useState<string | null>(null);
+  const [sourceUrl, setSourceUrl] = useState<string | null>(null);
+  const [videoLoading, setVideoLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [videoNotice, setVideoNotice] = useState<string | null>(null);
 
   useEffect(() => {
     Promise.all([apiFetch<MapPoint[]>("/api/maps"), apiFetch<MatchSummary[]>("/api/matches"), apiFetch<SettingsPayload>("/api/settings")])
@@ -27,36 +39,120 @@ export function MapsDashboard() {
       .catch((caught: Error) => setError(caught.message)).finally(() => setLoading(false));
   }, []);
 
-  const baseFiltered = useMemo(() => points.filter((point) => (!matchId || point.matchId === matchId) && (!typeId || point.subMomentTypeId === typeId)), [matchId, points, typeId]);
-  const filtered = useMemo(() => baseFiltered.filter((point) => {
-    if (period === "identified") return point.period !== null;
-    if (period === "unassigned") return point.period === null;
-    if (period === "all") return true;
-    return point.period === period;
-  }), [baseFiltered, period]);
+  useEffect(() => () => { videoRequestRef.current += 1; if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current); }, []);
+
+  const availableSubmomentTypes = useMemo(() => {
+    if (!settings) return [];
+    if (!momentTypeId) return settings.subMomentTypes;
+    const allowedIds = new Set(settings.momentTypes.find((type) => type.id === momentTypeId)?.allowedSubmoments?.map((type) => type.id) || []);
+    return settings.subMomentTypes.filter((type) => allowedIds.has(type.id));
+  }, [momentTypeId, settings]);
+
+  const baseFiltered = useMemo(() => points.filter((point) =>
+    (!matchId || point.matchId === matchId)
+    && (!momentTypeId || point.momentTypeId === momentTypeId)
+    && (!submomentTypeId || point.subMomentTypeId === submomentTypeId)
+  ), [matchId, momentTypeId, points, submomentTypeId]);
+  const filtered = useMemo(() => baseFiltered.filter((point) => period === "both" ? point.period !== null : point.period === period), [baseFiltered, period]);
+  const selectedPoint = filtered.find((point) => point.id === selectedPointId) || null;
+  const selectedSubmomentTime = selectedPoint?.timeSeconds ?? selectedPoint?.momentStartTimeSeconds ?? 0;
+  const selectedClipStart = Math.max(0, selectedSubmomentTime - 2);
+  const selectedClipEnd = selectedSubmomentTime + 2;
   const unassignedCount = baseFiltered.filter((point) => point.period === null).length;
   const fieldPoints = filtered.filter((point) => point.fieldX !== null && point.fieldY !== null).map((point) => ({
     id: point.id,
-    x: orientation === "normalized" && point.attackDirection ? normalizeFieldX(point.fieldX!, point.attackDirection) : point.fieldX!,
+    x: point.fieldX!,
     y: point.fieldY!,
     color: point.color,
+    active: point.id === selectedPointId,
     label: point.subMomentTypeName,
-    details: [point.timeSeconds === null ? "Time not recorded" : `Time: ${formatTime(point.timeSeconds)}`, `Match: ${point.matchTitle}`]
+    details: [`Moment: ${point.momentTypeName}`, point.timeSeconds === null ? "Time not recorded" : `Time: ${formatTime(point.timeSeconds)}`, `Half: ${matchPeriodLabel(point.period)}`, `Match: ${point.matchTitle}`]
   }));
-  const goalPoints = filtered.filter((point) => point.goalX !== null && point.goalY !== null).map((point) => ({ id: point.id, x: point.goalX!, y: point.goalY!, color: point.color, label: point.subMomentTypeName, details: [point.timeSeconds === null ? "Time not recorded" : `Time: ${formatTime(point.timeSeconds)}`, `Match: ${point.matchTitle}`] }));
-  const directions = new Set(filtered.map((point) => point.attackDirection).filter((direction): direction is AttackDirection => direction !== null));
-  const filteredHasUnassigned = filtered.some((point) => point.period === null);
-  const pitchDirection: AttackDirection | null = orientation === "normalized" && directions.size > 0 ? "left_to_right" : directions.size === 1 && !filteredHasUnassigned ? [...directions][0] : null;
+  const goalPoints = filtered.filter((point) => point.goalX !== null && point.goalY !== null).map((point) => ({
+    id: point.id,
+    x: point.goalX!,
+    y: point.goalY!,
+    color: point.color,
+    active: point.id === selectedPointId,
+    label: point.subMomentTypeName,
+    details: [`Moment: ${point.momentTypeName}`, point.timeSeconds === null ? "Time not recorded" : `Time: ${formatTime(point.timeSeconds)}`, `Half: ${matchPeriodLabel(point.period)}`, `Match: ${point.matchTitle}`]
+  }));
+  const pitchDirection: AttackDirection | null = period === "first_half" ? "left_to_right" : period === "second_half" ? "right_to_left" : null;
+
+  useEffect(() => {
+    if (!selectedPointId || filtered.some((point) => point.id === selectedPointId)) return;
+    setSelectedPointId(null);
+    videoRequestRef.current += 1;
+    setSourceUrl(null);
+    setVideoNotice(null);
+    if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
+    objectUrlRef.current = null;
+  }, [filtered, selectedPointId]);
+
+  function replaceVideoSource(file: File) {
+    if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
+    objectUrlRef.current = URL.createObjectURL(file);
+    setSourceUrl(objectUrlRef.current);
+  }
+
+  async function selectPoint(id: string) {
+    const point = points.find((item) => item.id === id);
+    if (!point) return;
+    setSelectedPointId(id);
+    setVideoNotice(null);
+    setVideoLoading(true);
+    setSourceUrl(null);
+    if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
+    objectUrlRef.current = null;
+    const request = ++videoRequestRef.current;
+    try {
+      const file = await getRememberedMatchVideo(point.matchId);
+      if (request !== videoRequestRef.current) return;
+      if (file) replaceVideoSource(file);
+      else setVideoNotice(`Select the local video for “${point.matchTitle}” to review this moment.`);
+    } catch {
+      if (request === videoRequestRef.current) setVideoNotice("The local video could not be restored. Select it again.");
+    } finally {
+      if (request === videoRequestRef.current) setVideoLoading(false);
+    }
+  }
+
+  async function loadSelectedVideo(file?: File) {
+    if (!file || !selectedPoint) return;
+    replaceVideoSource(file);
+    setVideoNotice(null);
+    await rememberMatchVideo(selectedPoint.matchId, file).catch(() => setVideoNotice("The video opened, but it may need to be selected again after closing the browser."));
+  }
+
+  function changeMomentType(nextId: string) {
+    setMomentTypeId(nextId);
+    if (!nextId) return;
+    const allowedIds = new Set(settings?.momentTypes.find((type) => type.id === nextId)?.allowedSubmoments?.map((type) => type.id) || []);
+    if (submomentTypeId && !allowedIds.has(submomentTypeId)) setSubmomentTypeId("");
+  }
 
   if (loading) return <div className="flex min-h-[60vh] items-center justify-center text-slate-400"><Loader2 className="mr-2 animate-spin" />Building maps…</div>;
   return <div className="space-y-5">
-    <div><p className="text-xs font-bold uppercase tracking-[.22em] text-leaf-400">Spatial analysis</p><h1 className="mt-2 text-3xl font-bold text-white">Occurrence maps</h1><p className="mt-2 text-sm text-slate-400">Each point represents a submoment; its color identifies the type.</p></div>
+    <input ref={fileInputRef} type="file" accept="video/*" className="hidden" onChange={(event) => { void loadSelectedVideo(event.target.files?.[0]); event.currentTarget.value = ""; }} />
+    <div><p className="text-xs font-bold uppercase tracking-[.22em] text-leaf-400">Spatial analysis</p><h1 className="mt-2 text-3xl font-bold text-white">Occurrence maps</h1><p className="mt-2 text-sm text-slate-400">Original coordinates: first-half attacks run left to right and second-half attacks run right to left.</p></div>
     {error ? <Panel className="border-red-400/20 p-4 text-red-100">{error}</Panel> : null}
-    <Panel className="grid gap-4 p-4 md:grid-cols-2 xl:grid-cols-[1fr_1fr_.8fr_1fr_auto] xl:items-end"><label className="grid gap-2"><Label>Match</Label><Select value={matchId} onChange={(event) => setMatchId(event.target.value)}><option value="">All matches</option>{matches.map((match) => <option key={match.id} value={match.id}>{match.title}</option>)}</Select></label><label className="grid gap-2"><Label>Submoment</Label><Select value={typeId} onChange={(event) => setTypeId(event.target.value)}><option value="">All types</option>{settings?.subMomentTypes.map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}</Select></label><label className="grid gap-2"><Label>Match period</Label><Select value={period} onChange={(event) => setPeriod(event.target.value)}><option value="identified">Identified halves</option><option value="first_half">1st half</option><option value="second_half">2nd half</option><option value="unassigned">Unassigned</option><option value="all">All occurrences</option></Select></label><label className="grid gap-2"><Label>Pitch orientation</Label><Select value={orientation} onChange={(event) => setOrientation(event.target.value as "normalized" | "original")}><option value="normalized">Normalize attack →</option><option value="original">Original coordinates</option></Select></label><div className="grid gap-1"><Badge className="h-10 justify-center px-4"><Filter size={14} className="mr-2" />{filtered.length} occurrences</Badge>{unassignedCount > 0 ? <span className="text-center text-[10px] text-amber-200">{unassignedCount} awaiting period markers</span> : null}</div></Panel>
-    <div className="grid gap-5 xl:grid-cols-[minmax(0,1.35fr)_minmax(22rem,.65fr)]">
-      <Panel className="p-4"><div className="flex items-center justify-between"><div><Label>Pitch</Label><p className="mt-1 text-xs text-slate-500">{orientation === "normalized" ? "Only identified periods are comparable; their attacks are aligned to the right." : "Points are shown at their original pitch coordinates."}</p></div><MapPinned className="text-leaf-400" /></div><PitchSurface className="mt-4" points={fieldPoints} direction={pitchDirection} directionLabel={orientation === "normalized" ? "Normalized attack" : "Attack"} /></Panel>
-      <Panel className="p-4"><div className="flex items-center justify-between"><div><Label>Goal</Label><p className="mt-1 text-xs text-slate-500">Destination of shots and configured actions.</p></div><Target className="text-fire-400" /></div><GoalSurface className="mt-4" points={goalPoints} /></Panel>
+    <Panel className="grid grid-cols-2 gap-4 p-4 xl:grid-cols-[1fr_1fr_1fr_.8fr_auto] xl:items-end">
+      <label className="grid gap-2"><Label>Match</Label><Select value={matchId} onChange={(event) => setMatchId(event.target.value)}><option value="">All matches</option>{matches.map((match) => <option key={match.id} value={match.id}>{match.title}</option>)}</Select></label>
+      <label className="grid gap-2"><Label>Moment</Label><Select value={momentTypeId} onChange={(event) => changeMomentType(event.target.value)}><option value="">All moments</option>{settings?.momentTypes.map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}</Select></label>
+      <label className="grid gap-2"><Label>Submoment</Label><Select value={submomentTypeId} onChange={(event) => setSubmomentTypeId(event.target.value)}><option value="">All submoments</option>{availableSubmomentTypes.map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}</Select></label>
+      <label className="grid gap-2"><Label>Match period</Label><Select value={period} onChange={(event) => setPeriod(event.target.value as MapPeriod)}><option value="both">Both halves</option><option value="first_half">1st half</option><option value="second_half">2nd half</option></Select></label>
+      <div className="grid gap-1"><Badge className="h-10 justify-center px-4"><Filter size={14} className="mr-2" />{filtered.length} occurrences</Badge>{unassignedCount > 0 ? <span className="text-center text-[10px] text-amber-200">{unassignedCount} awaiting period markers</span> : null}</div>
+    </Panel>
+    <div className="maps-surfaces grid grid-cols-[minmax(0,1.35fr)_minmax(0,.65fr)] items-start gap-2 sm:gap-5">
+      <Panel className="min-w-0 p-2 sm:p-4"><div className="flex items-center justify-between gap-2"><div className="min-w-0"><Label>Pitch</Label><p className="mt-1 truncate text-[10px] text-slate-500 sm:text-xs">Points remain in their original match coordinates.</p></div><MapPinned className="shrink-0 text-leaf-400" /></div><PitchSurface className="mt-3 sm:mt-4" points={fieldPoints} direction={pitchDirection} directionLabel={period === "first_half" ? "1st half attack" : period === "second_half" ? "2nd half attack" : undefined} onPointSelect={(id) => void selectPoint(id)} /></Panel>
+      <div className="min-w-0 space-y-2 sm:space-y-5">
+        <Panel className="p-2 sm:p-4"><div className="flex items-center justify-between gap-2"><div className="min-w-0"><Label>Goal</Label><p className="mt-1 truncate text-[10px] text-slate-500 sm:text-xs">Shot and action destinations.</p></div><Target className="shrink-0 text-fire-400" /></div><GoalSurface className="mt-3 sm:mt-4" points={goalPoints} onPointSelect={(id) => void selectPoint(id)} /></Panel>
+        <Panel className="overflow-hidden">
+          <div className="border-b border-white/10 p-2 sm:p-3"><Label>Selected submoment video</Label>{selectedPoint ? <p className="mt-1 truncate text-[10px] text-slate-500 sm:text-xs">{selectedPoint.matchTitle} · {selectedPoint.momentTypeName} / {selectedPoint.subMomentTypeName} · {formatTime(selectedClipStart)}–{formatTime(selectedClipEnd)}</p> : null}</div>
+          <div className="relative aspect-video bg-black">{sourceUrl && selectedPoint ? <video key={`${sourceUrl}-${selectedPoint.id}`} ref={videoRef} src={sourceUrl} controls playsInline className="h-full w-full object-contain" onLoadedMetadata={(event) => { const end = Math.min(event.currentTarget.duration, selectedClipEnd); event.currentTarget.currentTime = Math.min(selectedClipStart, end); void event.currentTarget.play(); }} onPlay={(event) => { const end = Math.min(event.currentTarget.duration, selectedClipEnd); if (event.currentTarget.currentTime < selectedClipStart || event.currentTarget.currentTime >= end) event.currentTarget.currentTime = Math.min(selectedClipStart, end); }} onSeeking={(event) => { const end = Math.min(event.currentTarget.duration, selectedClipEnd); if (event.currentTarget.currentTime < selectedClipStart) event.currentTarget.currentTime = selectedClipStart; else if (event.currentTarget.currentTime > end) event.currentTarget.currentTime = end; }} onTimeUpdate={(event) => { const end = Math.min(event.currentTarget.duration, selectedClipEnd); if (event.currentTarget.currentTime >= end) { event.currentTarget.pause(); event.currentTarget.currentTime = end; } }} /> : <div className="flex h-full flex-col items-center justify-center p-2 text-center sm:p-5"><FileVideo className="text-leaf-400" size={28} />{videoLoading ? <p className="mt-2 text-xs text-slate-400">Restoring video…</p> : selectedPoint ? <><p className="mt-2 text-[10px] text-slate-400 sm:text-xs">{videoNotice || "Select the match video."}</p><Button className="mt-2" size="sm" onClick={() => fileInputRef.current?.click()}><Upload size={13} />Select video</Button></> : <p className="mt-2 text-[10px] text-slate-500 sm:text-xs">Select a point on the pitch or goal.</p>}</div>}</div>
+        </Panel>
+      </div>
     </div>
-    <Panel className="p-4"><Label>Legend</Label><div className="mt-3 flex flex-wrap gap-2">{settings?.subMomentTypes.map((type) => { const count = filtered.filter((point) => point.subMomentTypeId === type.id).length; return <span key={type.id} className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/[.04] px-3 py-2 text-xs text-slate-300"><span className="h-3 w-3 rounded-full" style={{ backgroundColor: type.color }} />{type.name}<strong className="text-white">{count}</strong></span>; })}</div></Panel>
+    <Panel className="p-4"><Label>Legend</Label><div className="mt-3 flex flex-wrap gap-2">{availableSubmomentTypes.map((type) => { const count = filtered.filter((point) => point.subMomentTypeId === type.id).length; return <span key={type.id} className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/[.04] px-3 py-2 text-xs text-slate-300"><span className="h-3 w-3 rounded-full" style={{ backgroundColor: type.color }} />{type.name}<strong className="text-white">{count}</strong></span>; })}</div></Panel>
   </div>;
 }
