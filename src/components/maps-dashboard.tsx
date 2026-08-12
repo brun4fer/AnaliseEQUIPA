@@ -8,7 +8,6 @@ import { Badge, Button, Label, Panel, Select } from "@/components/ui";
 import type { MapPoint, MatchSummary, SettingsPayload } from "@/lib/domain";
 import { apiFetch } from "@/lib/http";
 import { getRememberedMatchVideo, rememberMatchVideo } from "@/lib/local-video-store";
-import type { AttackDirection } from "@/lib/match-periods";
 import { matchPeriodLabel } from "@/lib/match-periods";
 import { formatTime } from "@/lib/time";
 
@@ -55,9 +54,8 @@ export function MapsDashboard() {
   ), [matchId, momentTypeId, points, submomentTypeId]);
   const filtered = useMemo(() => baseFiltered.filter((point) => period === "both" ? point.period !== null : point.period === period), [baseFiltered, period]);
   const selectedPoint = filtered.find((point) => point.id === selectedPointId) || null;
-  const selectedSubmomentTime = selectedPoint?.timeSeconds ?? selectedPoint?.momentStartTimeSeconds ?? 0;
-  const selectedClipStart = Math.max(0, selectedSubmomentTime - 2);
-  const selectedClipEnd = selectedSubmomentTime + 2;
+  const selectedClipStart = selectedPoint?.momentStartTimeSeconds ?? 0;
+  const selectedClipEnd = selectedPoint?.momentEndTimeSeconds ?? 0;
   const unassignedCount = baseFiltered.filter((point) => point.period === null).length;
   const fieldPoints = filtered.filter((point) => point.fieldX !== null && point.fieldY !== null).map((point) => ({
     id: point.id,
@@ -77,8 +75,6 @@ export function MapsDashboard() {
     label: point.subMomentTypeName,
     details: [`Moment: ${point.momentTypeName}`, point.timeSeconds === null ? "Time not recorded" : `Time: ${formatTime(point.timeSeconds)}`, `Half: ${matchPeriodLabel(point.period)}`, `Match: ${point.matchTitle}`]
   }));
-  const pitchDirection: AttackDirection | null = period === "first_half" ? "left_to_right" : period === "second_half" ? "right_to_left" : null;
-
   useEffect(() => {
     if (!selectedPointId || filtered.some((point) => point.id === selectedPointId)) return;
     setSelectedPointId(null);
@@ -144,11 +140,11 @@ export function MapsDashboard() {
       <div className="grid gap-1"><Badge className="h-10 justify-center px-4"><Filter size={14} className="mr-2" />{filtered.length} occurrences</Badge>{unassignedCount > 0 ? <span className="text-center text-[10px] text-amber-200">{unassignedCount} awaiting period markers</span> : null}</div>
     </Panel>
     <div className="maps-surfaces grid grid-cols-[minmax(0,1.35fr)_minmax(0,.65fr)] items-start gap-2 sm:gap-5">
-      <Panel className="min-w-0 p-2 sm:p-4"><div className="flex items-center justify-between gap-2"><div className="min-w-0"><Label>Pitch</Label><p className="mt-1 truncate text-[10px] text-slate-500 sm:text-xs">Points remain in their original match coordinates.</p></div><MapPinned className="shrink-0 text-leaf-400" /></div><PitchSurface className="mt-3 sm:mt-4" points={fieldPoints} direction={pitchDirection} directionLabel={period === "first_half" ? "1st half attack" : period === "second_half" ? "2nd half attack" : undefined} onPointSelect={(id) => void selectPoint(id)} /></Panel>
+      <Panel className="min-w-0 p-2 sm:p-4"><div className="flex items-center justify-between gap-2"><div className="min-w-0"><Label>Pitch</Label><p className="mt-1 truncate text-[10px] text-slate-500 sm:text-xs">Points remain in their original match coordinates.</p></div><MapPinned className="shrink-0 text-leaf-400" /></div><PitchSurface className="mt-3 sm:mt-4" points={fieldPoints} onPointSelect={(id) => void selectPoint(id)} /></Panel>
       <div className="min-w-0 space-y-2 sm:space-y-5">
         <Panel className="p-2 sm:p-4"><div className="flex items-center justify-between gap-2"><div className="min-w-0"><Label>Goal</Label><p className="mt-1 truncate text-[10px] text-slate-500 sm:text-xs">Shot and action destinations.</p></div><Target className="shrink-0 text-fire-400" /></div><GoalSurface className="mt-3 sm:mt-4" points={goalPoints} onPointSelect={(id) => void selectPoint(id)} /></Panel>
         <Panel className="overflow-hidden">
-          <div className="border-b border-white/10 p-2 sm:p-3"><Label>Selected submoment video</Label>{selectedPoint ? <p className="mt-1 truncate text-[10px] text-slate-500 sm:text-xs">{selectedPoint.matchTitle} · {selectedPoint.momentTypeName} / {selectedPoint.subMomentTypeName} · {formatTime(selectedClipStart)}–{formatTime(selectedClipEnd)}</p> : null}</div>
+          <div className="border-b border-white/10 p-2 sm:p-3"><Label>Selected moment video</Label>{selectedPoint ? <p className="mt-1 truncate text-[10px] text-slate-500 sm:text-xs">{selectedPoint.matchTitle} · {selectedPoint.momentTypeName} / {selectedPoint.subMomentTypeName} · {formatTime(selectedClipStart)}–{formatTime(selectedClipEnd)}</p> : null}</div>
           <div className="relative aspect-video bg-black">{sourceUrl && selectedPoint ? <video key={`${sourceUrl}-${selectedPoint.id}`} ref={videoRef} src={sourceUrl} controls playsInline className="h-full w-full object-contain" onLoadedMetadata={(event) => { const end = Math.min(event.currentTarget.duration, selectedClipEnd); event.currentTarget.currentTime = Math.min(selectedClipStart, end); void event.currentTarget.play(); }} onPlay={(event) => { const end = Math.min(event.currentTarget.duration, selectedClipEnd); if (event.currentTarget.currentTime < selectedClipStart || event.currentTarget.currentTime >= end) event.currentTarget.currentTime = Math.min(selectedClipStart, end); }} onSeeking={(event) => { const end = Math.min(event.currentTarget.duration, selectedClipEnd); if (event.currentTarget.currentTime < selectedClipStart) event.currentTarget.currentTime = selectedClipStart; else if (event.currentTarget.currentTime > end) event.currentTarget.currentTime = end; }} onTimeUpdate={(event) => { const end = Math.min(event.currentTarget.duration, selectedClipEnd); if (event.currentTarget.currentTime >= end) { event.currentTarget.pause(); event.currentTarget.currentTime = end; } }} /> : <div className="flex h-full flex-col items-center justify-center p-2 text-center sm:p-5"><FileVideo className="text-leaf-400" size={28} />{videoLoading ? <p className="mt-2 text-xs text-slate-400">Restoring video…</p> : selectedPoint ? <><p className="mt-2 text-[10px] text-slate-400 sm:text-xs">{videoNotice || "Select the match video."}</p><Button className="mt-2" size="sm" onClick={() => fileInputRef.current?.click()}><Upload size={13} />Select video</Button></> : <p className="mt-2 text-[10px] text-slate-500 sm:text-xs">Select a point on the pitch or goal.</p>}</div>}</div>
         </Panel>
       </div>

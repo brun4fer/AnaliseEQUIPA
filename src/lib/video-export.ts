@@ -1,5 +1,5 @@
 import type { MatchDetail, MomentRecord, SubMomentRecord } from "@/lib/domain";
-import { formatPreciseTime } from "@/lib/time";
+import { formatTime } from "@/lib/time";
 
 type ExportMomentClipInput = {
   sourceUrl: string;
@@ -127,7 +127,7 @@ export async function exportMomentClip({
       const progressSecond = Math.floor(elapsed);
       if (progressSecond !== lastProgressSecond) {
         lastProgressSecond = progressSecond;
-        onStatus?.(`Exporting ${formatPreciseTime(elapsed)} / ${formatPreciseTime(clipDuration)}...`);
+        onStatus?.(`Exporting ${formatTime(elapsed)} / ${formatTime(clipDuration)}...`);
       }
 
       if (sourceVideo.ended || sourceVideo.currentTime >= end) {
@@ -271,8 +271,8 @@ export function drawOverlay(
     match.title,
     `Opponent: ${match.opponentName}`,
     match.competition ? `Competition: ${match.competition}` : null,
-    `Time: ${formatPreciseTime(start)} - ${formatPreciseTime(end)}`,
-    `Duration: ${formatPreciseTime(end - start)}`,
+    `Time: ${formatTime(start)} - ${formatTime(end)}`,
+    `Duration: ${formatTime(end - start)}`,
     moment.notes ? `Notes: ${moment.notes}` : null,
   ].filter(Boolean) as string[];
 
@@ -343,7 +343,7 @@ function buildSubMomentLines(subMoments: SubMomentRecord[]) {
   const lines = subMoments.slice(0, 6).map((subMoment) => {
     const pieces = [subMoment.subMomentType.name];
     if (subMoment.timeSeconds !== null) {
-      pieces.push(formatPreciseTime(subMoment.timeSeconds));
+      pieces.push(formatTime(subMoment.timeSeconds));
     }
     if (subMoment.fieldX !== null && subMoment.fieldY !== null) {
       pieces.push(`field ${formatPoint(subMoment.fieldX, subMoment.fieldY)}`);
@@ -455,7 +455,7 @@ function wait(milliseconds: number) {
 
 export function buildClipFileName(match: Pick<MatchDetail, "title">, moment: MomentRecord, extension: string) {
   const title = sanitizeFileName(match.title) || "match";
-  const time = formatPreciseTime(moment.startTimeSeconds).replace(/[:.]/g, "-");
+  const time = formatTime(moment.startTimeSeconds).replace(/:/g, "-");
   return `${title}-${moment.momentType.code}-${time}.${extension}`;
 }
 

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, Check, ChevronsLeft, ChevronsRight, CircleStop, Clock3, FileVideo, Keyboard, Loader2, Pause, Pencil, Play, Settings2, Tags, Trash2, Upload, X } from "lucide-react";
+import { ArrowLeft, Check, ChevronsLeft, ChevronsRight, Clock3, FileVideo, Keyboard, Loader2, Pause, Pencil, Play, Settings2, Tags, Trash2, Upload, X } from "lucide-react";
 
 import { MatchEditDialog } from "@/components/match-edit-dialog";
 import { MomentEditDialog } from "@/components/moment-edit-dialog";
@@ -11,7 +11,7 @@ import { Badge, Button, Input, Label, Panel } from "@/components/ui";
 import type { MatchDetail, MomentRecord, MomentTypeRecord, SettingsPayload, VideoRecord } from "@/lib/domain";
 import { apiFetch } from "@/lib/http";
 import { getRememberedMatchVideo, rememberMatchVideo, videoPersistsAfterRestart } from "@/lib/local-video-store";
-import { getAttackDirectionAtTime, getMatchPeriodAtTime } from "@/lib/match-periods";
+import { getMatchPeriodAtTime } from "@/lib/match-periods";
 import { formatBytes, formatTime, roundTime } from "@/lib/time";
 
 type ActiveMoment = { id: string; momentTypeId: string; startTimeSeconds: number };
@@ -261,16 +261,13 @@ export function AnalysisWorkspace({ matchId }: { matchId: string }) {
   if (loading) return <div className="flex min-h-[65vh] items-center justify-center text-slate-400"><Loader2 className="mr-2 animate-spin" />Preparing analysis…</div>;
   if (!match || !settings) return <Panel className="border-red-400/20 p-5 text-red-100">{notice || "Could not open this match."}</Panel>;
 
-  const attackDirection = getAttackDirectionAtTime(match, currentTime);
-  const activeTypes = settings.momentTypes.filter((type) => activeMoments.some((active) => active.momentTypeId === type.id));
   const timelineDuration = duration || match.video?.durationSeconds || Math.max(1, ...match.moments.map((moment) => moment.endTimeSeconds));
 
   return <div className="space-y-4">
     <input ref={fileInputRef} type="file" accept="video/*" className="hidden" onChange={(event) => void loadVideo(event.target.files?.[0])} />
 
-    <header className="flex flex-col gap-4 rounded-2xl border border-white/10 bg-white/[.045] p-4 lg:flex-row lg:items-center lg:justify-between"><div><Link href="/" className="inline-flex items-center gap-1 text-xs text-slate-500 hover:text-white"><ArrowLeft size={13} />Matches</Link><h1 className="mt-2 text-2xl font-bold text-white">{match.title}</h1><p className="mt-1 text-sm text-slate-500">{match.competition || "No competition"} · {attackDirection ? `attack ${attackDirection === "left_to_right" ? "→" : "←"}` : "period not identified"}</p></div><div className="flex flex-wrap gap-2"><Button onClick={() => setEditingMatch(true)}><Settings2 size={16} />Edit match</Button><Button onClick={() => fileInputRef.current?.click()}><Upload size={16} />{sourceUrl ? "Change video" : "Select video"}</Button></div></header>
-    {notice ? <div className="rounded-xl border border-leaf-400/25 bg-leaf-400/10 px-4 py-3 text-sm text-emerald-100">{notice}</div> : null}
-    {activeTypes.length > 0 ? <div className="flex flex-wrap items-center gap-2 rounded-xl border border-amber-300/25 bg-amber-400/10 px-4 py-3 text-sm text-amber-100"><CircleStop size={16} /><span className="font-semibold">In progress:</span>{activeTypes.map((type) => <Badge key={type.id} style={{ borderColor: type.color, color: type.color }}>{type.name} · key {type.defaultShortcut}</Badge>)}</div> : null}
+    <header className="flex flex-col gap-4 rounded-2xl border border-white/10 bg-white/[.045] p-4 lg:flex-row lg:items-center lg:justify-between"><div><Link href="/" className="inline-flex items-center gap-1 text-xs text-slate-500 hover:text-white"><ArrowLeft size={13} />Matches</Link><h1 className="mt-2 text-2xl font-bold text-white">{match.title}</h1><p className="mt-1 text-sm text-slate-500">{match.competition || "No competition"}</p></div><div className="flex flex-wrap gap-2"><Button onClick={() => setEditingMatch(true)}><Settings2 size={16} />Edit match</Button><Button onClick={() => fileInputRef.current?.click()}><Upload size={16} />{sourceUrl ? "Change video" : "Select video"}</Button></div></header>
+    {notice ? <div role="status" aria-live="polite" className="fixed bottom-4 right-4 z-50 flex max-w-sm items-start gap-3 rounded-xl border border-leaf-400/25 bg-pitch-950/95 px-4 py-3 text-sm text-emerald-100 shadow-2xl backdrop-blur-xl"><span className="min-w-0 flex-1">{notice}</span><button type="button" aria-label="Dismiss message" onClick={() => setNotice(null)} className="shrink-0 text-emerald-200/70 transition hover:text-white"><X size={15} /></button></div> : null}
 
     <div className="analysis-layout grid grid-cols-[minmax(0,.72fr)_minmax(0,1.8fr)_minmax(0,.88fr)] items-start gap-2 sm:gap-4 min-[1120px]:grid-cols-[16rem_minmax(30rem,1fr)_19rem]">
       <Panel className="flex min-h-0 flex-col overflow-hidden" style={{ height: sideHeight }}><div className="shrink-0 border-b border-white/10 p-3"><div className="flex items-center justify-between"><div><Label>Tagged moments</Label><p className="mt-1 text-xs text-slate-500">{match.moments.length} in the video</p></div><Badge>{match.moments.length}</Badge></div></div><div className="min-h-0 flex-1 overflow-y-auto">{match.moments.length === 0 ? <p className="p-4 text-sm text-slate-500">There are no moments yet.</p> : match.moments.map((moment) => <div key={moment.id} className={`border-b border-white/[.06] p-2.5 ${selectedMomentId === moment.id ? "bg-leaf-400/10" : ""}`}><button className="flex w-full items-center gap-2 text-left" onClick={() => reviewMoment(moment)}><span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: moment.momentType.color }} /><span className="min-w-0 flex-1 truncate text-xs font-semibold text-white">{moment.momentType.name}</span><span className="shrink-0 font-mono text-[10px] text-slate-500">{formatTime(moment.startTimeSeconds)}</span></button><div className="mt-2 flex items-center gap-1"><button aria-label="Mark as positive" onClick={() => void toggleOutcome(moment, "positive")} className={`flex h-7 w-7 items-center justify-center rounded-md border transition ${moment.outcome === "positive" ? "border-emerald-300 bg-emerald-400 text-emerald-950 shadow-[0_0_14px_rgba(52,211,153,.5)]" : "border-emerald-400/30 bg-emerald-400/10 text-emerald-300 hover:bg-emerald-400/25"}`}><Check size={13} /></button><button aria-label="Mark as negative" onClick={() => void toggleOutcome(moment, "negative")} className={`flex h-7 w-7 items-center justify-center rounded-md border transition ${moment.outcome === "negative" ? "border-red-300 bg-red-400 text-red-950 shadow-[0_0_14px_rgba(248,113,113,.5)]" : "border-red-400/30 bg-red-400/10 text-red-300 hover:bg-red-400/25"}`}><X size={13} /></button><Button size="sm" className="ml-auto h-7" onClick={() => setEditingMoment(moment)}><Pencil size={12} />Edit</Button><Button size="sm" variant="danger" className="h-7" onClick={() => void removeMoment(moment)}><Trash2 size={12} />Delete</Button></div></div>)}</div></Panel>

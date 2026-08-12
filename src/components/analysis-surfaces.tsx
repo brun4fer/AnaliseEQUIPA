@@ -1,7 +1,6 @@
 "use client";
 
 import { cn } from "@/lib/cn";
-import type { AttackDirection } from "@/lib/match-periods";
 
 export type SurfacePoint = { id: string; x: number; y: number; color: string; label?: string; details?: string[]; active?: boolean };
 export type Coordinate = { x: number; y: number };
@@ -33,7 +32,7 @@ function Markers({ points, onSelect }: { points: SurfacePoint[]; onSelect?: (id:
   </span>);
 }
 
-export function PitchSurface({ points = [], value, color = "#2dd66f", direction = "left_to_right", directionLabel, onChange, onPointSelect, className }: { points?: SurfacePoint[]; value?: Coordinate | null; color?: string; direction?: AttackDirection | null; directionLabel?: string; onChange?: (point: Coordinate) => void; onPointSelect?: (id: string) => void; className?: string }) {
+export function PitchSurface({ points = [], value, color = "#2dd66f", onChange, onPointSelect, className }: { points?: SurfacePoint[]; value?: Coordinate | null; color?: string; onChange?: (point: Coordinate) => void; onPointSelect?: (id: string) => void; className?: string }) {
   const selected = value ? [{ id: "selected", ...value, color, active: true }] : [];
   return <button type="button" aria-disabled={!onChange} onClick={(event) => onChange?.(clickCoordinate(event))} className={cn("relative block aspect-[1.55/1] w-full overflow-hidden rounded-xl border-2 border-white/25 bg-[#167641] text-left shadow-inner", onChange ? "cursor-crosshair" : "cursor-default", className)}>
     <svg viewBox="0 0 105 68" className="absolute inset-0 h-full w-full" aria-hidden="true">
@@ -52,7 +51,6 @@ export function PitchSurface({ points = [], value, color = "#2dd66f", direction 
       {[22.67, 45.33].map((y) => <line key={y} x1="1" y1={y} x2="104" y2={y} stroke="rgba(255,255,255,.18)" strokeWidth=".35" strokeDasharray="1.5 1.5" />)}
     </svg>
     <Markers points={[...points, ...selected]} onSelect={onPointSelect} />
-    {direction ? <span className={cn("absolute top-2 rounded bg-black/45 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-white", direction === "right_to_left" ? "left-3" : "right-3")}>{directionLabel || "Attack"} {direction === "right_to_left" ? "←" : "→"}</span> : null}
   </button>;
 }
 
