@@ -3,16 +3,19 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, Check, ChevronsLeft, ChevronsRight, Clock3, FileVideo, Keyboard, Loader2, Pause, Pencil, Play, Settings2, Tags, Trash2, Upload, X } from "lucide-react";
+import { Archive, ArrowLeft, Check, ChevronsLeft, ChevronsRight, Clock3, FileVideo, Keyboard, Loader2, Pause, Pencil, Play, Settings2, Tags, Trash2, Upload, X } from "lucide-react";
 
 import { MatchEditDialog } from "@/components/match-edit-dialog";
 import { MomentEditDialog } from "@/components/moment-edit-dialog";
-import { Badge, Button, Input, Label, Panel } from "@/components/ui";
+import { Button, Input, Label, Panel } from "@/components/ui";
 import type { MatchDetail, MomentRecord, MomentTypeRecord, SettingsPayload, VideoRecord } from "@/lib/domain";
+import { isExportPickerCancellation, pickExportDirectory, writeBlobToDirectory } from "@/lib/export-directory";
 import { apiFetch } from "@/lib/http";
 import { getRememberedMatchVideo, rememberMatchVideo, videoPersistsAfterRestart } from "@/lib/local-video-store";
 import { getMatchPeriodAtTime } from "@/lib/match-periods";
+import { SmartVideoExportSession } from "@/lib/smart-video-export";
 import { formatBytes, formatTime, roundTime } from "@/lib/time";
+import { downloadBlob } from "@/lib/video-export";
 
 type ActiveMoment = { id: string; momentTypeId: string; startTimeSeconds: number };
 type PeriodMarkerKey = "firstHalfStartSeconds" | "firstHalfEndSeconds" | "secondHalfStartSeconds" | "secondHalfEndSeconds";
@@ -29,6 +32,7 @@ export function AnalysisWorkspace({ matchId }: { matchId: string }) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const playerWrapperRef = useRef<HTMLDivElement | null>(null);
+  const sourceFileRef = useRef<File | null>(null);
   const [match, setMatch] = useState<MatchDetail | null>(null);
   const [settings, setSettings] = useState<SettingsPayload | null>(null);
   const [sourceUrl, setSourceUrl] = useState<string | null>(null);
@@ -46,6 +50,8 @@ export function AnalysisWorkspace({ matchId }: { matchId: string }) {
   const [editingMatch, setEditingMatch] = useState(false);
   const [previewEnd, setPreviewEnd] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [exportStatus, setExportStatus] = useState("");
   const [sideHeight, setSideHeight] = useState<number | undefined>();
 
   useEffect(() => {
@@ -61,7 +67,11 @@ export function AnalysisWorkspace({ matchId }: { matchId: string }) {
 
   useEffect(() => {
     getRememberedMatchVideo(matchId)
-      .then((file) => { if (file) setSourceUrl(URL.createObjectURL(file)); })
+      .then((file) => {
+        if (!file) return;
+        sourceFileRef.current = file;
+        setSourceUrl(URL.createObjectURL(file));
+      })
       .catch(() => undefined)
       .finally(() => setRestoringVideo(false));
   }, [matchId]);
@@ -81,6 +91,7 @@ export function AnalysisWorkspace({ matchId }: { matchId: string }) {
   async function loadVideo(file?: File) {
     if (!file) return;
     if (sourceUrl) URL.revokeObjectURL(sourceUrl);
+    sourceFileRef.current = file;
     const url = URL.createObjectURL(file);
     setSourceUrl(url);
     setNotice(videoPersistsAfterRestart(file) ? null : "This large video is available during this browser session. Select it again after closing or fully refreshing the app.");
@@ -258,6 +269,91 @@ export function AnalysisWorkspace({ matchId }: { matchId: string }) {
     router.refresh();
   }
 
+  async function exportAllMoments() {
+    if (!match || match.moments.length === 0 || exporting) return;
+
+    const file = sourceFileRef.current || await getRememberedMatchVideo(match.id).catch(() => null);
+    if (!file) {
+      setNotice("Select the local match video before exporting all moments.");
+      fileInputRef.current?.click();
+      return;
+    }
+
+    let directory = null;
+    try {
+      directory = await pickExportDirectory();
+    } catch (error) {
+      if (isExportPickerCancellation(error)) return;
+      setNotice(error instanceof Error ? error.message : "Could not open the export folder.");
+      return;
+    }
+
+    setExporting(true);
+    setNotice(null);
+    setExportStatus("Preparing export…");
+
+    const moments = [...match.moments].sort((a, b) => a.startTimeSeconds - b.startTimeSeconds);
+    const root = `${safeExportName(match.title)}-${moments.length}-clips`;
+    const archive = directory ? null : new (await import("jszip")).default();
+    const indexRows = [["moment", "start", "end", "submoments", "files"]];
+    const exportUrl = sourceUrl || URL.createObjectURL(file);
+    const ownsExportUrl = !sourceUrl;
+    const session = new SmartVideoExportSession(file);
+
+    try {
+      for (const [index, moment] of moments.entries()) {
+        const current = index + 1;
+        setExportStatus(`Exporting ${current} of ${moments.length}: ${moment.momentType.name}`);
+        const result = await session.exportMoment({
+          match,
+          moment,
+          quality: "high",
+          sourceUrlFallback: exportUrl,
+          onStatus: (message) => setExportStatus(`${current} of ${moments.length}: ${message}`)
+        });
+        const folders = [...new Set(moment.subMoments.map((item) => item.subMomentType.name))];
+        if (folders.length === 0) folders.push("No submoment");
+        const fileName = `${String(current).padStart(3, "0")}-${result.fileName}`;
+        const paths = folders.map((folder) => `${safeExportName(moment.momentType.name)}/${safeExportName(folder)}/${fileName}`);
+
+        for (const path of paths) {
+          if (directory) await writeBlobToDirectory(directory, `${root}/${path}`, result.blob);
+          else archive?.file(`${root}/${path}`, result.blob);
+        }
+
+        indexRows.push([
+          moment.momentType.name,
+          formatTime(moment.startTimeSeconds),
+          formatTime(moment.endTimeSeconds),
+          folders.join(" | "),
+          paths.join(" | ")
+        ]);
+      }
+
+      const csv = new Blob([toCsv(indexRows)], { type: "text/csv;charset=utf-8" });
+      if (directory) {
+        await writeBlobToDirectory(directory, `${root}/index.csv`, csv);
+      } else {
+        archive?.file(`${root}/index.csv`, csv);
+        setExportStatus("Creating the ZIP file…");
+        const blob = await archive!.generateAsync(
+          { type: "blob", compression: "STORE", streamFiles: true },
+          (metadata) => setExportStatus(`Creating the ZIP file: ${Math.round(metadata.percent)}%`)
+        );
+        downloadBlob(blob, `${root}.zip`);
+      }
+
+      setNotice(`${moments.length} moments exported successfully${directory ? ` to ${root}` : " in a ZIP file"}.`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Could not export all moments.");
+    } finally {
+      session.dispose();
+      if (ownsExportUrl) URL.revokeObjectURL(exportUrl);
+      setExporting(false);
+      setExportStatus("");
+    }
+  }
+
   if (loading) return <div className="flex min-h-[65vh] items-center justify-center text-slate-400"><Loader2 className="mr-2 animate-spin" />Preparing analysis…</div>;
   if (!match || !settings) return <Panel className="border-red-400/20 p-5 text-red-100">{notice || "Could not open this match."}</Panel>;
 
@@ -268,9 +364,10 @@ export function AnalysisWorkspace({ matchId }: { matchId: string }) {
 
     <header className="flex flex-col gap-4 rounded-2xl border border-white/10 bg-white/[.045] p-4 lg:flex-row lg:items-center lg:justify-between"><div><Link href="/" className="inline-flex items-center gap-1 text-xs text-slate-500 hover:text-white"><ArrowLeft size={13} />Matches</Link><h1 className="mt-2 text-2xl font-bold text-white">{match.title}</h1><p className="mt-1 text-sm text-slate-500">{match.competition || "No competition"}</p></div><div className="flex flex-wrap gap-2"><Button onClick={() => setEditingMatch(true)}><Settings2 size={16} />Edit match</Button><Button onClick={() => fileInputRef.current?.click()}><Upload size={16} />{sourceUrl ? "Change video" : "Select video"}</Button></div></header>
     {notice ? <div role="status" aria-live="polite" className="fixed bottom-4 right-4 z-50 flex max-w-sm items-start gap-3 rounded-xl border border-leaf-400/25 bg-pitch-950/95 px-4 py-3 text-sm text-emerald-100 shadow-2xl backdrop-blur-xl"><span className="min-w-0 flex-1">{notice}</span><button type="button" aria-label="Dismiss message" onClick={() => setNotice(null)} className="shrink-0 text-emerald-200/70 transition hover:text-white"><X size={15} /></button></div> : null}
+    {exporting ? <div role="status" aria-live="polite" className="fixed bottom-4 right-4 z-50 flex max-w-sm items-center gap-3 rounded-xl border border-leaf-400/25 bg-pitch-950/95 px-4 py-3 text-sm text-emerald-100 shadow-2xl backdrop-blur-xl"><Loader2 size={16} className="shrink-0 animate-spin" /><span className="min-w-0 flex-1">{exportStatus}</span></div> : null}
 
     <div className="analysis-layout grid grid-cols-[minmax(0,.72fr)_minmax(0,1.8fr)_minmax(0,.88fr)] items-start gap-2 sm:gap-4 min-[1120px]:grid-cols-[16rem_minmax(30rem,1fr)_19rem]">
-      <Panel className="flex min-h-0 flex-col overflow-hidden" style={{ height: sideHeight }}><div className="shrink-0 border-b border-white/10 p-3"><div className="flex items-center justify-between"><div><Label>Tagged moments</Label><p className="mt-1 text-xs text-slate-500">{match.moments.length} in the video</p></div><Badge>{match.moments.length}</Badge></div></div><div className="min-h-0 flex-1 overflow-y-auto">{match.moments.length === 0 ? <p className="p-4 text-sm text-slate-500">There are no moments yet.</p> : match.moments.map((moment) => <div key={moment.id} className={`border-b border-white/[.06] p-2.5 ${selectedMomentId === moment.id ? "bg-leaf-400/10" : ""}`}><button className="flex w-full items-center gap-2 text-left" onClick={() => reviewMoment(moment)}><span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: moment.momentType.color }} /><span className="min-w-0 flex-1 truncate text-xs font-semibold text-white">{moment.momentType.name}</span><span className="shrink-0 font-mono text-[10px] text-slate-500">{formatTime(moment.startTimeSeconds)}</span></button><div className="mt-2 flex items-center gap-1"><button aria-label="Mark as positive" onClick={() => void toggleOutcome(moment, "positive")} className={`flex h-7 w-7 items-center justify-center rounded-md border transition ${moment.outcome === "positive" ? "border-emerald-300 bg-emerald-400 text-emerald-950 shadow-[0_0_14px_rgba(52,211,153,.5)]" : "border-emerald-400/30 bg-emerald-400/10 text-emerald-300 hover:bg-emerald-400/25"}`}><Check size={13} /></button><button aria-label="Mark as negative" onClick={() => void toggleOutcome(moment, "negative")} className={`flex h-7 w-7 items-center justify-center rounded-md border transition ${moment.outcome === "negative" ? "border-red-300 bg-red-400 text-red-950 shadow-[0_0_14px_rgba(248,113,113,.5)]" : "border-red-400/30 bg-red-400/10 text-red-300 hover:bg-red-400/25"}`}><X size={13} /></button><Button size="sm" className="ml-auto h-7" onClick={() => setEditingMoment(moment)}><Pencil size={12} />Edit</Button><Button size="sm" variant="danger" className="h-7" onClick={() => void removeMoment(moment)}><Trash2 size={12} />Delete</Button></div></div>)}</div></Panel>
+      <Panel className="flex min-h-0 flex-col overflow-hidden" style={{ height: sideHeight }}><div className="shrink-0 border-b border-white/10 p-3"><div className="flex items-center justify-between gap-2"><div className="min-w-0"><Label>Tagged moments</Label><p className="mt-1 text-xs text-slate-500">{match.moments.length} in the video</p></div><Button size="sm" className="shrink-0" disabled={match.moments.length === 0 || exporting} title={exporting ? exportStatus : "Export all tagged moments"} onClick={() => void exportAllMoments()}>{exporting ? <Loader2 size={14} className="animate-spin" /> : <Archive size={14} />}Export all</Button></div></div><div className="min-h-0 flex-1 overflow-y-auto">{match.moments.length === 0 ? <p className="p-4 text-sm text-slate-500">There are no moments yet.</p> : match.moments.map((moment) => <div key={moment.id} className={`border-b border-white/[.06] p-2.5 ${selectedMomentId === moment.id ? "bg-leaf-400/10" : ""}`}><button className="flex w-full items-center gap-2 text-left" onClick={() => reviewMoment(moment)}><span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: moment.momentType.color }} /><span className="min-w-0 flex-1 truncate text-xs font-semibold text-white">{moment.momentType.name}</span><span className="shrink-0 font-mono text-[10px] text-slate-500">{formatTime(moment.startTimeSeconds)}</span></button><div className="mt-2 flex items-center gap-1"><button aria-label="Mark as positive" onClick={() => void toggleOutcome(moment, "positive")} className={`flex h-7 w-7 items-center justify-center rounded-md border transition ${moment.outcome === "positive" ? "border-emerald-300 bg-emerald-400 text-emerald-950 shadow-[0_0_14px_rgba(52,211,153,.5)]" : "border-emerald-400/30 bg-emerald-400/10 text-emerald-300 hover:bg-emerald-400/25"}`}><Check size={13} /></button><button aria-label="Mark as negative" onClick={() => void toggleOutcome(moment, "negative")} className={`flex h-7 w-7 items-center justify-center rounded-md border transition ${moment.outcome === "negative" ? "border-red-300 bg-red-400 text-red-950 shadow-[0_0_14px_rgba(248,113,113,.5)]" : "border-red-400/30 bg-red-400/10 text-red-300 hover:bg-red-400/25"}`}><X size={13} /></button><Button size="sm" className="ml-auto h-7" onClick={() => setEditingMoment(moment)}><Pencil size={12} />Edit</Button><Button size="sm" variant="danger" className="h-7" onClick={() => void removeMoment(moment)}><Trash2 size={12} />Delete</Button></div></div>)}</div></Panel>
 
       <div ref={playerWrapperRef}><Panel className="overflow-hidden"><div className="relative aspect-video bg-black">{sourceUrl ? <video ref={videoRef} src={sourceUrl} className="h-full w-full" playsInline onLoadedMetadata={(event) => { setDuration(event.currentTarget.duration); event.currentTarget.playbackRate = playbackRate; }} onTimeUpdate={(event) => { const video = event.currentTarget; setCurrentTime(video.currentTime); if (previewEnd !== null && video.currentTime >= previewEnd - .04) { video.pause(); video.currentTime = previewEnd; setPreviewEnd(null); } }} onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} /> : <div className="flex h-full flex-col items-center justify-center p-8 text-center"><FileVideo size={50} className="text-leaf-400" /><h2 className="mt-4 font-bold text-white">{restoringVideo ? "Restoring the local video…" : "Select the local match video"}</h2><p className="mt-2 max-w-md text-sm text-slate-500">The file remains on your computer. The app only stores metadata and timestamps.</p>{match.video ? <div className="mt-4 w-full max-w-lg rounded-lg border border-leaf-400/25 bg-leaf-400/[.06] p-3 text-left"><p className="text-[10px] font-bold uppercase tracking-[.18em] text-leaf-400/70">Expected video</p><p className="mt-1 truncate text-sm font-semibold text-white">{match.video.fileName}</p><p className="mt-1 text-xs text-slate-400">{formatBytes(match.video.fileSize)} · {formatTime(match.video.durationSeconds)}</p></div> : null}{!restoringVideo ? <Button className="mt-5" variant="primary" onClick={() => fileInputRef.current?.click()}><Upload size={16} />Choose video</Button> : null}</div>}</div>
         <div className="border-t border-white/10 p-3"><input aria-label="Video position" type="range" min={0} max={duration || 0} step={.1} value={Math.min(currentTime, duration || 0)} disabled={!sourceUrl} onChange={(event) => seekTo(Number(event.target.value))} className="w-full accent-emerald-400" /><div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1fr)_17rem]"><p className="self-end text-[11px] text-slate-500">Drag the bar to move anywhere in the video.</p><div><Label>Exact second</Label><div className="mt-1 flex gap-2"><Input inputMode="decimal" placeholder="e.g. 125.5" value={exactSecond} onChange={(event) => setExactSecond(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") goToExactSecond(); }} /><Button disabled={!sourceUrl} onClick={goToExactSecond}>Go</Button></div></div></div><div className="mt-3 flex flex-wrap items-center justify-between gap-3"><div className="flex flex-wrap items-center gap-2"><Button size="icon" onClick={() => seekBy(-15)} disabled={!sourceUrl} title="Back 15 seconds"><ChevronsLeft size={17} /></Button><Button size="sm" onClick={() => seekBy(-5)} disabled={!sourceUrl}>−5</Button><Button size="icon" variant="primary" disabled={!sourceUrl || saving} onClick={togglePlayback}>{playing ? <Pause size={17} /> : <Play size={17} />}</Button><Button size="sm" onClick={() => seekBy(5)} disabled={!sourceUrl}>+5</Button><Button size="icon" onClick={() => seekBy(15)} disabled={!sourceUrl} title="Forward 15 seconds"><ChevronsRight size={17} /></Button><div className="ml-1 flex overflow-hidden rounded-lg border border-white/10">{[1, 2, 4].map((rate) => <button key={rate} type="button" onClick={() => setRate(rate)} className={`h-9 px-2.5 text-xs font-semibold transition ${playbackRate === rate ? "bg-leaf-400 text-ink-950" : "bg-white/[.04] text-slate-300 hover:bg-white/[.1]"}`}>{rate}×</button>)}</div></div><span className="inline-flex items-center gap-2 font-mono text-sm text-white"><Clock3 size={15} className="text-leaf-400" />{formatTime(currentTime)} / {formatTime(duration)}</span></div></div></Panel></div>
@@ -290,4 +387,12 @@ export function AnalysisWorkspace({ matchId }: { matchId: string }) {
 function Timeline({ momentTypes, moments, duration, selectedMomentId, onSelect }: { momentTypes: MomentTypeRecord[]; moments: MomentRecord[]; duration: number; selectedMomentId: string | null; onSelect: (moment: MomentRecord) => void }) {
   const visibleTypes = useMemo(() => momentTypes.filter((type) => type.active || moments.some((moment) => moment.momentTypeId === type.id)), [momentTypes, moments]);
   return <Panel className="overflow-hidden p-4"><div><Label>Timeline</Label><h2 className="mt-1 font-bold text-white">Moments in the video</h2></div><div className="mt-4 overflow-x-auto"><div className="min-w-[850px] overflow-hidden rounded-xl border border-white/10">{visibleTypes.map((type) => <div key={type.id} className="grid grid-cols-[10rem_minmax(0,1fr)] border-b border-white/[.07] last:border-b-0"><div className="flex items-center gap-2 border-r border-white/[.07] px-3 py-2"><span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: type.color }} /><span className="truncate text-xs text-slate-300">{type.name}</span></div><div className="relative min-h-10 bg-black/10">{moments.filter((moment) => moment.momentTypeId === type.id).map((moment) => { const left = Math.max(0, Math.min(100, (moment.startTimeSeconds / duration) * 100)); const width = Math.max(.6, Math.min(100 - left, ((moment.endTimeSeconds - moment.startTimeSeconds) / duration) * 100)); return <button key={moment.id} type="button" title={`${type.name}: ${formatTime(moment.startTimeSeconds)} – ${formatTime(moment.endTimeSeconds)}`} onClick={() => onSelect(moment)} className={`absolute top-1/2 h-4 -translate-y-1/2 rounded-full border border-white/20 transition hover:h-6 ${selectedMomentId === moment.id ? "h-6 ring-2 ring-white/40" : ""}`} style={{ left: `${left}%`, width: `${width}%`, backgroundColor: type.color }} />; })}</div></div>)}</div></div></Panel>;
+}
+
+function safeExportName(value: string) {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[<>:"/\\|?*\u0000-\u001F]/g, "-").replace(/\s+/g, " ").trim() || "Unnamed";
+}
+
+function toCsv(rows: string[][]) {
+  return `\uFEFF${rows.map((row) => row.map((value) => `"${value.replace(/"/g, '""')}"`).join(",")).join("\r\n")}`;
 }

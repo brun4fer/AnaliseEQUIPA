@@ -14,12 +14,7 @@ export function roundTime(seconds: number) {
 }
 
 export function formatPreciseTime(seconds: number) {
-  if (!Number.isFinite(seconds)) return "00:00.0";
-  const safe = Math.max(0, seconds);
-  const hours = Math.floor(safe / 3600);
-  const minutes = Math.floor((safe % 3600) / 60);
-  const remaining = (safe % 60).toFixed(1).padStart(4, "0");
-  return hours > 0 ? `${hours}:${String(minutes).padStart(2, "0")}:${remaining}` : `${String(minutes).padStart(2, "0")}:${remaining}`;
+  return formatTime(seconds);
 }
 
 export function formatBytes(bytes: number) {
