@@ -46,6 +46,8 @@ export type MomentRecord = {
   period: string | null;
   notes: string | null;
   outcome: string | null;
+  createdAt: string;
+  updatedAt: string;
   momentType: MomentTypeRecord;
   subMoments: SubMomentRecord[];
 };
@@ -98,6 +100,7 @@ export type AccountPayload = {
   username: string;
   teamName: string | null;
   needsOnboarding: boolean;
+  managementAccess: { configured: boolean; unlocked: boolean };
 };
 
 export type MaintenanceRecord = {

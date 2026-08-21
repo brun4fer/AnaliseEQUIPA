@@ -5,6 +5,13 @@ import { prisma } from "@/lib/prisma";
 
 export const SESSION_COOKIE = "feirense_analysis_session";
 
+export class ManagementAccessError extends Error {
+  constructor(message = "Enter the management password to access this area.") {
+    super(message);
+    this.name = "ManagementAccessError";
+  }
+}
+
 function authSecret() {
   const value = process.env.AUTH_SECRET;
   if (!value && process.env.NODE_ENV === "production") throw new Error("AUTH_SECRET is not configured.");
@@ -42,7 +49,15 @@ export async function ensureInitialAdmin() {
   });
 }
 
-export type SessionPayload = { userId: string; username: string; role: string; mustChangePassword: boolean; needsOnboarding?: boolean; exp: number };
+export type SessionPayload = {
+  userId: string;
+  username: string;
+  role: string;
+  mustChangePassword: boolean;
+  needsOnboarding?: boolean;
+  managementAccessVersion?: number | null;
+  exp: number;
+};
 
 export function createSessionToken(payload: Omit<SessionPayload, "exp">) {
   const data = Buffer.from(JSON.stringify({ ...payload, exp: Date.now() + 1000 * 60 * 60 * 24 * 7 })).toString("base64url");
@@ -80,6 +95,23 @@ export async function requireWorkspace() {
   const account = await requireAccount();
   if (!account.workspace) throw new Error("Complete the team setup before continuing.");
   return { ...account, workspace: account.workspace };
+}
+
+export async function requireManagementWorkspace() {
+  const account = await requireWorkspace();
+  if (!account.workspace.managementPasswordHash) {
+    throw new ManagementAccessError("Create the management password before accessing this area.");
+  }
+  if (account.session.managementAccessVersion !== account.workspace.managementPasswordVersion) {
+    throw new ManagementAccessError();
+  }
+  return account;
+}
+
+export function validateManagementPassword(password: string) {
+  if (password.length < 8 || !/[A-Za-z]/.test(password) || !/\d/.test(password)) {
+    throw new Error("The password must contain at least 8 characters, one letter and one number.");
+  }
 }
 
 export function validatePassword(password: string) {

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 const COOKIE = "feirense_analysis_session";
-const publicPaths = ["/login", "/api/auth/login", "/api/health"];
+const publicPaths = ["/login", "/register", "/api/auth/login", "/api/auth/register", "/api/health"];
 
 function bytes(value: string) { return new TextEncoder().encode(value); }
 function base64url(value: ArrayBuffer) { return btoa(String.fromCharCode(...new Uint8Array(value))).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_"); }

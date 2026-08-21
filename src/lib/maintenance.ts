@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import { requireWorkspace } from "@/lib/auth";
+import { requireManagementWorkspace, requireWorkspace } from "@/lib/auth";
 
 export type MaintenanceResource = "seasons" | "clubs" | "competitions";
 
@@ -16,7 +16,7 @@ export async function listMaintenance(resource: MaintenanceResource) {
 }
 
 export async function createMaintenance(resource: MaintenanceResource, input: Record<string, unknown>) {
-  const { workspace } = await requireWorkspace();
+  const { workspace } = await requireManagementWorkspace();
   const data = await maintenanceData(resource, input, workspace.id);
   try {
     if (resource === "seasons") return await prisma.season.create({ data: { ...data.season!, workspaceId: workspace.id } });
@@ -30,7 +30,7 @@ export async function createMaintenance(resource: MaintenanceResource, input: Re
 }
 
 export async function updateMaintenance(resource: MaintenanceResource, id: string, input: Record<string, unknown>) {
-  const { workspace } = await requireWorkspace();
+  const { workspace } = await requireManagementWorkspace();
   const data = await maintenanceData(resource, input, workspace.id);
   try {
     if (resource === "seasons") {
@@ -78,7 +78,7 @@ export async function updateMaintenance(resource: MaintenanceResource, id: strin
 }
 
 export async function deleteMaintenance(resource: MaintenanceResource, id: string) {
-  const { workspace } = await requireWorkspace();
+  const { workspace } = await requireManagementWorkspace();
   if (resource === "seasons") {
     await prisma.season.findFirstOrThrow({ where: { id, workspaceId: workspace.id }, select: { id: true } });
     const [matches, competitions] = await Promise.all([prisma.match.count({ where: { seasonId: id } }), prisma.competition.count({ where: { seasonId: id } })]);

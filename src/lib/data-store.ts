@@ -1,7 +1,7 @@
 import { Prisma } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
-import { requireWorkspace } from "@/lib/auth";
+import { requireManagementWorkspace, requireWorkspace } from "@/lib/auth";
 import { getAttackDirectionAtTime, getMatchPeriodAtTime } from "@/lib/match-periods";
 
 const matchInclude = {
@@ -57,7 +57,7 @@ export async function getMatch(matchId: string) {
 }
 
 export async function createMatch(input: Record<string, unknown>) {
-  const { workspace } = await requireWorkspace();
+  const { workspace } = await requireManagementWorkspace();
   const seasonId = String(input.seasonId || "");
   const competitionId = String(input.competitionId || "");
   const opponentClubId = String(input.opponentClubId || "");
@@ -92,7 +92,7 @@ export async function createMatch(input: Record<string, unknown>) {
 }
 
 export async function updateMatch(matchId: string, input: Record<string, unknown>) {
-  const { workspace } = await requireWorkspace();
+  const { workspace } = await requireManagementWorkspace();
   const markerKeys = [
     "firstHalfStartSeconds",
     "firstHalfEndSeconds",
@@ -148,13 +148,13 @@ export async function updateMatch(matchId: string, input: Record<string, unknown
 }
 
 export async function deleteMatch(matchId: string) {
-  const { workspace } = await requireWorkspace();
+  const { workspace } = await requireManagementWorkspace();
   await prisma.match.findFirstOrThrow({ where: { id: matchId, workspaceId: workspace.id }, select: { id: true } });
   await prisma.match.delete({ where: { id: matchId } });
 }
 
 export async function saveVideo(matchId: string, input: Record<string, unknown>) {
-  const { workspace } = await requireWorkspace();
+  const { workspace } = await requireManagementWorkspace();
   await prisma.match.findFirstOrThrow({ where: { id: matchId, workspaceId: workspace.id }, select: { id: true } });
   const video = await prisma.video.upsert({
     where: { matchId },
@@ -187,7 +187,7 @@ export async function getSettings() {
 }
 
 export async function createMoment(matchId: string, input: Record<string, unknown>) {
-  const { workspace } = await requireWorkspace();
+  const { workspace } = await requireManagementWorkspace();
   const start = Number(input.startTimeSeconds);
   const end = Number(input.endTimeSeconds);
   if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) throw new Error("Invalid moment interval.");
@@ -210,7 +210,7 @@ export async function createMoment(matchId: string, input: Record<string, unknow
 }
 
 export async function updateMoment(momentId: string, input: Record<string, unknown>) {
-  const { workspace } = await requireWorkspace();
+  const { workspace } = await requireManagementWorkspace();
   const current = await prisma.moment.findFirstOrThrow({ where: { id: momentId, match: { workspaceId: workspace.id } }, include: { match: true } });
   if (input.momentTypeId !== undefined) {
     const nextType = await prisma.momentType.findFirstOrThrow({
@@ -242,7 +242,7 @@ export async function updateMoment(momentId: string, input: Record<string, unkno
 }
 
 export async function createSubMoment(momentId: string, input: Record<string, unknown>) {
-  const { workspace } = await requireWorkspace();
+  const { workspace } = await requireManagementWorkspace();
   const moment = await prisma.moment.findFirstOrThrow({
     where: { id: momentId, match: { workspaceId: workspace.id } },
     select: { id: true, momentType: { select: { allowedSubmoments: { select: { id: true } } } } }
@@ -273,7 +273,7 @@ export async function createSubMoment(momentId: string, input: Record<string, un
 }
 
 export async function updateSubMoment(subMomentId: string, input: Record<string, unknown>) {
-  const { workspace } = await requireWorkspace();
+  const { workspace } = await requireManagementWorkspace();
   const current = await prisma.subMoment.findFirstOrThrow({
     where: { id: subMomentId, moment: { match: { workspaceId: workspace.id } } },
     include: { subMomentType: true, moment: { select: { momentType: { select: { allowedSubmoments: { select: { id: true } } } } } } }
@@ -343,7 +343,7 @@ export async function getMapPoints() {
 }
 
 export async function saveMomentType(input: Record<string, unknown>, id?: string) {
-  const { workspace } = await requireWorkspace();
+  const { workspace } = await requireManagementWorkspace();
   const allowedSubmomentIds = Array.isArray(input.allowedSubmomentIds) ? [...new Set(input.allowedSubmomentIds.map(String))] : [];
   const allowedCount = await prisma.subMomentType.count({ where: { id: { in: allowedSubmomentIds }, workspaceId: workspace.id } });
   if (allowedCount !== allowedSubmomentIds.length) throw new Error("One or more selected submoments are invalid.");
@@ -379,7 +379,7 @@ export async function saveMomentType(input: Record<string, unknown>, id?: string
 }
 
 export async function saveSubMomentType(input: Record<string, unknown>, id?: string) {
-  const { workspace } = await requireWorkspace();
+  const { workspace } = await requireManagementWorkspace();
   const data = {
     name: String(input.name || "").trim(),
     code: String(input.code || "").trim().toUpperCase(),
@@ -399,27 +399,27 @@ export async function saveSubMomentType(input: Record<string, unknown>, id?: str
 }
 
 export async function deleteMomentType(id: string) {
-  const { workspace } = await requireWorkspace();
+  const { workspace } = await requireManagementWorkspace();
   await prisma.momentType.findFirstOrThrow({ where: { id, workspaceId: workspace.id }, select: { id: true } });
   if (await prisma.moment.count({ where: { momentTypeId: id } })) throw new Error("This moment type is already used and cannot be deleted. Rename it instead.");
   await prisma.momentType.delete({ where: { id } });
 }
 
 export async function deleteSubMomentType(id: string) {
-  const { workspace } = await requireWorkspace();
+  const { workspace } = await requireManagementWorkspace();
   await prisma.subMomentType.findFirstOrThrow({ where: { id, workspaceId: workspace.id }, select: { id: true } });
   if (await prisma.subMoment.count({ where: { subMomentTypeId: id } })) throw new Error("This submoment type is already used and cannot be deleted. Rename it instead.");
   await prisma.subMomentType.delete({ where: { id } });
 }
 
 export async function deleteMoment(id: string) {
-  const { workspace } = await requireWorkspace();
+  const { workspace } = await requireManagementWorkspace();
   await prisma.moment.findFirstOrThrow({ where: { id, match: { workspaceId: workspace.id } }, select: { id: true } });
   return prisma.moment.delete({ where: { id } });
 }
 
 export async function deleteSubMoment(id: string) {
-  const { workspace } = await requireWorkspace();
+  const { workspace } = await requireManagementWorkspace();
   await prisma.subMoment.findFirstOrThrow({ where: { id, moment: { match: { workspaceId: workspace.id } } }, select: { id: true } });
   return prisma.subMoment.delete({ where: { id } });
 }
