@@ -59,6 +59,8 @@ export type VideoRecord = {
   fileSize: number;
   durationSeconds: number;
   mimeType: string;
+  storageStatus: "LOCAL" | "UPLOADING" | "READY" | "FAILED";
+  uploadedAt?: string | null;
 };
 
 export type MatchSummary = {

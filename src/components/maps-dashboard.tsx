@@ -9,6 +9,7 @@ import type { MapPoint, MatchSummary, SettingsPayload } from "@/lib/domain";
 import { apiFetch } from "@/lib/http";
 import { getRememberedMatchVideo, rememberMatchVideo } from "@/lib/local-video-store";
 import { matchPeriodLabel } from "@/lib/match-periods";
+import { getRemoteVideoUrl } from "@/lib/remote-video-store";
 import { formatTime } from "@/lib/time";
 
 type MapPeriod = "both" | "first_half" | "second_half";
@@ -102,12 +103,21 @@ export function MapsDashboard() {
     objectUrlRef.current = null;
     const request = ++videoRequestRef.current;
     try {
+      const match = matches.find((item) => item.id === point.matchId);
+      if (match?.video?.storageStatus === "READY") {
+        const remote = await getRemoteVideoUrl(point.matchId).catch(() => null);
+        if (request !== videoRequestRef.current) return;
+        if (remote) {
+          setSourceUrl(remote.url);
+          return;
+        }
+      }
       const file = await getRememberedMatchVideo(point.matchId);
       if (request !== videoRequestRef.current) return;
       if (file) replaceVideoSource(file);
-      else setVideoNotice(`Select the local video for “${point.matchTitle}” to review this moment.`);
+      else setVideoNotice(match?.video?.storageStatus === "READY" ? "The cloud video could not be loaded. Try again." : `Upload the video for “${point.matchTitle}” from its analysis page.`);
     } catch {
-      if (request === videoRequestRef.current) setVideoNotice("The local video could not be restored. Select it again.");
+      if (request === videoRequestRef.current) setVideoNotice("The video could not be loaded. Try again.");
     } finally {
       if (request === videoRequestRef.current) setVideoLoading(false);
     }
@@ -145,7 +155,7 @@ export function MapsDashboard() {
         <Panel className="p-2 sm:p-4"><div className="flex items-center justify-between gap-2"><div className="min-w-0"><Label>Goal</Label><p className="mt-1 truncate text-[10px] text-slate-500 sm:text-xs">Shot and action destinations.</p></div><Target className="shrink-0 text-fire-400" /></div><GoalSurface className="mt-3 sm:mt-4" points={goalPoints} onPointSelect={(id) => void selectPoint(id)} /></Panel>
         <Panel className="overflow-hidden">
           <div className="border-b border-white/10 p-2 sm:p-3"><Label>Selected moment video</Label>{selectedPoint ? <p className="mt-1 truncate text-[10px] text-slate-500 sm:text-xs">{selectedPoint.matchTitle} · {selectedPoint.momentTypeName} / {selectedPoint.subMomentTypeName} · {formatTime(selectedClipStart)}–{formatTime(selectedClipEnd)}</p> : null}</div>
-          <div className="relative aspect-video bg-black">{sourceUrl && selectedPoint ? <video key={`${sourceUrl}-${selectedPoint.id}`} ref={videoRef} src={sourceUrl} controls playsInline className="h-full w-full object-contain" onLoadedMetadata={(event) => { const end = Math.min(event.currentTarget.duration, selectedClipEnd); event.currentTarget.currentTime = Math.min(selectedClipStart, end); void event.currentTarget.play(); }} onPlay={(event) => { const end = Math.min(event.currentTarget.duration, selectedClipEnd); if (event.currentTarget.currentTime < selectedClipStart || event.currentTarget.currentTime >= end) event.currentTarget.currentTime = Math.min(selectedClipStart, end); }} onSeeking={(event) => { const end = Math.min(event.currentTarget.duration, selectedClipEnd); if (event.currentTarget.currentTime < selectedClipStart) event.currentTarget.currentTime = selectedClipStart; else if (event.currentTarget.currentTime > end) event.currentTarget.currentTime = end; }} onTimeUpdate={(event) => { const end = Math.min(event.currentTarget.duration, selectedClipEnd); if (event.currentTarget.currentTime >= end) { event.currentTarget.pause(); event.currentTarget.currentTime = end; } }} /> : <div className="flex h-full flex-col items-center justify-center p-2 text-center sm:p-5"><FileVideo className="text-leaf-400" size={28} />{videoLoading ? <p className="mt-2 text-xs text-slate-400">Restoring video…</p> : selectedPoint ? <><p className="mt-2 text-[10px] text-slate-400 sm:text-xs">{videoNotice || "Select the match video."}</p><Button className="mt-2" size="sm" onClick={() => fileInputRef.current?.click()}><Upload size={13} />Select video</Button></> : <p className="mt-2 text-[10px] text-slate-500 sm:text-xs">Select a point on the pitch or goal.</p>}</div>}</div>
+          <div className="relative aspect-video bg-black">{sourceUrl && selectedPoint ? <video key={`${sourceUrl}-${selectedPoint.id}`} ref={videoRef} src={sourceUrl} crossOrigin="anonymous" controls playsInline className="h-full w-full object-contain" onLoadedMetadata={(event) => { const end = Math.min(event.currentTarget.duration, selectedClipEnd); event.currentTarget.currentTime = Math.min(selectedClipStart, end); void event.currentTarget.play(); }} onPlay={(event) => { const end = Math.min(event.currentTarget.duration, selectedClipEnd); if (event.currentTarget.currentTime < selectedClipStart || event.currentTarget.currentTime >= end) event.currentTarget.currentTime = Math.min(selectedClipStart, end); }} onSeeking={(event) => { const end = Math.min(event.currentTarget.duration, selectedClipEnd); if (event.currentTarget.currentTime < selectedClipStart) event.currentTarget.currentTime = selectedClipStart; else if (event.currentTarget.currentTime > end) event.currentTarget.currentTime = end; }} onTimeUpdate={(event) => { const end = Math.min(event.currentTarget.duration, selectedClipEnd); if (event.currentTarget.currentTime >= end) { event.currentTarget.pause(); event.currentTarget.currentTime = end; } }} /> : <div className="flex h-full flex-col items-center justify-center p-2 text-center sm:p-5"><FileVideo className="text-leaf-400" size={28} />{videoLoading ? <p className="mt-2 text-xs text-slate-400">Loading video…</p> : selectedPoint ? <><p className="mt-2 text-[10px] text-slate-400 sm:text-xs">{videoNotice || "Upload this match video from the analysis page."}</p>{matches.find((item) => item.id === selectedPoint.matchId)?.video?.storageStatus !== "READY" ? <Button className="mt-2" size="sm" onClick={() => fileInputRef.current?.click()}><Upload size={13} />Use local file</Button> : null}</> : <p className="mt-2 text-[10px] text-slate-500 sm:text-xs">Select a point on the pitch or goal.</p>}</div>}</div>
         </Panel>
       </div>
     </div>

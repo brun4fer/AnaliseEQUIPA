@@ -8,13 +8,15 @@ import { Coordinate, GoalSurface, PitchSurface } from "@/components/analysis-sur
 import { Badge, Button, Label, Panel, Select, TextArea } from "@/components/ui";
 import type { MatchDetail, MomentRecord, SettingsPayload, SubMomentRecord } from "@/lib/domain";
 import { apiFetch } from "@/lib/http";
-import { getRememberedMatchVideo, rememberMatchVideo, videoPersistsAfterRestart } from "@/lib/local-video-store";
+import { getRememberedMatchVideo, rememberMatchVideo } from "@/lib/local-video-store";
 import { getMatchPeriodAtTime, matchPeriodLabel } from "@/lib/match-periods";
+import { getRemoteVideoUrl, uploadMatchVideo } from "@/lib/remote-video-store";
 import { formatBytes, formatTime, roundTime } from "@/lib/time";
 
 export function SubmomentWorkspace({ matchId }: { matchId: string }) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const uploadAbortRef = useRef<AbortController | null>(null);
   const [match, setMatch] = useState<MatchDetail | null>(null);
   const [settings, setSettings] = useState<SettingsPayload | null>(null);
   const [sourceUrl, setSourceUrl] = useState<string | null>(null);
@@ -33,25 +35,35 @@ export function SubmomentWorkspace({ matchId }: { matchId: string }) {
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
   const [editingSubmomentId, setEditingSubmomentId] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
 
   useEffect(() => {
+    let active = true;
     Promise.all([apiFetch<MatchDetail>(`/api/matches/${matchId}`), apiFetch<SettingsPayload>("/api/settings")])
-      .then(([matchData, settingsData]) => {
+      .then(async ([matchData, settingsData]) => {
+        if (!active) return;
         setMatch(matchData);
         setSettings(settingsData);
         setSelectedMomentId(matchData.moments[0]?.id || null);
+        if (matchData.video?.storageStatus === "READY") {
+          const remote = await getRemoteVideoUrl(matchId).catch(() => null);
+          if (active && remote) {
+            setSourceUrl(remote.url);
+            return;
+          }
+        }
+        const file = await getRememberedMatchVideo(matchId).catch(() => null);
+        if (active && file) setSourceUrl(URL.createObjectURL(file));
       })
       .catch((error: Error) => setNotice(error.message))
-      .finally(() => setLoading(false));
-  }, [matchId]);
-
-  useEffect(() => {
-    getRememberedMatchVideo(matchId)
-      .then((file) => {
-        if (file) setSourceUrl(URL.createObjectURL(file));
-      })
-      .catch(() => undefined)
-      .finally(() => setRestoringVideo(false));
+      .finally(() => {
+        if (active) {
+          setLoading(false);
+          setRestoringVideo(false);
+        }
+      });
+    return () => { active = false; };
   }, [matchId]);
 
   useEffect(() => () => {
@@ -78,14 +90,33 @@ export function SubmomentWorkspace({ matchId }: { matchId: string }) {
     setEditingSubmomentId(null);
   }, [availableSubmomentTypes, selectedSubMomentTypeId]);
 
-  function loadVideo(file?: File) {
+  async function loadVideo(file?: File) {
     if (!file) return;
     if (sourceUrl) URL.revokeObjectURL(sourceUrl);
     setSourceUrl(URL.createObjectURL(file));
-    void rememberMatchVideo(matchId, file).catch(() => setNotice("The video opened, but it will not remain available after this tab is closed."));
-    if (!videoPersistsAfterRestart(file)) setNotice("This large video is available during this browser session. Select it again after closing or fully refreshing the app.");
-    if (match?.video && file.name !== match.video.fileName) setNotice(`You selected “${file.name}”, but this match expects “${match.video.fileName}”. Confirm that this is the correct file.`);
-    else setNotice(null);
+    await rememberMatchVideo(matchId, file).catch(() => undefined);
+    setUploading(true);
+    setUploadProgress(0);
+    const controller = new AbortController();
+    uploadAbortRef.current = controller;
+    try {
+      const result = await uploadMatchVideo(matchId, file, ({ progress, detail }) => {
+        setUploadProgress(progress);
+        setNotice(`${detail} ${Math.round(progress * 100)}%`);
+      }, controller.signal);
+      const [remote, savedMatch] = await Promise.all([
+        getRemoteVideoUrl(matchId),
+        apiFetch<MatchDetail>(`/api/matches/${matchId}`),
+      ]);
+      setSourceUrl(remote.url);
+      setMatch(savedMatch);
+      setNotice(result.resumed ? "Video upload resumed and completed successfully." : "Video stored securely in Cloudflare R2.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "The video could not be uploaded.");
+    } finally {
+      if (uploadAbortRef.current === controller) uploadAbortRef.current = null;
+      setUploading(false);
+    }
   }
 
   function selectMoment(moment: MomentRecord, play = false) {
@@ -220,17 +251,17 @@ export function SubmomentWorkspace({ matchId }: { matchId: string }) {
   if (!match || !settings) return <Panel className="border-red-400/20 p-5 text-red-100">{notice || "Could not open this match."}</Panel>;
 
   return <div className="mx-auto flex w-full max-w-[1600px] min-h-0 flex-col gap-2">
-    <input ref={fileInputRef} type="file" accept="video/*" className="hidden" onChange={(event) => loadVideo(event.target.files?.[0])} />
+    <input ref={fileInputRef} type="file" accept="video/*" className="hidden" onChange={(event) => { void loadVideo(event.target.files?.[0]); event.currentTarget.value = ""; }} />
 
     {notice ? <div role="status" className="fixed bottom-4 right-4 z-50 flex max-w-sm items-center gap-3 rounded-lg border border-leaf-400/25 bg-pitch-950/95 px-3 py-2 text-xs text-emerald-100 shadow-2xl"><span>{notice}</span><button type="button" aria-label="Dismiss message" onClick={() => setNotice(null)}><X size={13} /></button></div> : null}
 
-    <Panel className="flex shrink-0 flex-wrap items-center gap-2 px-2 py-1.5"><Link href={`/analysis/${matchId}`} className="inline-flex h-8 items-center gap-1.5 rounded-md border border-white/10 bg-white/[.04] px-2.5 text-[10px] font-semibold text-slate-300 transition hover:bg-white/[.08] hover:text-white"><ArrowLeft size={12} />Moment tagging</Link><span className="hidden min-w-0 max-w-48 truncate text-[10px] font-semibold text-white lg:block">{match.title}</span><label className="flex min-w-0 flex-1 items-center gap-2"><span className="shrink-0 text-[9px] font-semibold uppercase tracking-[.16em] text-slate-500">Moment</span><Select className="h-8 min-w-0 flex-1 py-0 text-xs" value={filterTypeId} onChange={(event) => changeFilter(event.target.value)}><option value="">All moments ({match.moments.length})</option>{settings.momentTypes.map((type) => <option key={type.id} value={type.id}>{type.name} ({match.moments.filter((moment) => moment.momentTypeId === type.id).length})</option>)}</Select></label><Badge className="shrink-0">{selectedIndex >= 0 ? `${selectedIndex + 1} / ${moments.length}` : `0 / ${moments.length}`}</Badge><Button size="sm" className="h-8 shrink-0" onClick={() => fileInputRef.current?.click()}><Upload size={13} />{sourceUrl ? "Change video" : "Select video"}</Button></Panel>
+    <Panel className="flex shrink-0 flex-wrap items-center gap-2 px-2 py-1.5"><Link href={`/analysis/${matchId}`} className="inline-flex h-8 items-center gap-1.5 rounded-md border border-white/10 bg-white/[.04] px-2.5 text-[10px] font-semibold text-slate-300 transition hover:bg-white/[.08] hover:text-white"><ArrowLeft size={12} />Moment tagging</Link><span className="hidden min-w-0 max-w-48 truncate text-[10px] font-semibold text-white lg:block">{match.title}</span><label className="flex min-w-0 flex-1 items-center gap-2"><span className="shrink-0 text-[9px] font-semibold uppercase tracking-[.16em] text-slate-500">Moment</span><Select className="h-8 min-w-0 flex-1 py-0 text-xs" value={filterTypeId} onChange={(event) => changeFilter(event.target.value)}><option value="">All moments ({match.moments.length})</option>{settings.momentTypes.map((type) => <option key={type.id} value={type.id}>{type.name} ({match.moments.filter((moment) => moment.momentTypeId === type.id).length})</option>)}</Select></label><Badge className="shrink-0">{selectedIndex >= 0 ? `${selectedIndex + 1} / ${moments.length}` : `0 / ${moments.length}`}</Badge>{uploading ? <Button size="sm" variant="danger" className="h-8 shrink-0" onClick={() => uploadAbortRef.current?.abort()}><X size={13} />Cancel {Math.round(uploadProgress * 100)}%</Button> : <Button size="sm" className="h-8 shrink-0" onClick={() => fileInputRef.current?.click()}><Upload size={13} />{match.video?.storageStatus === "READY" ? "Replace video" : "Upload video"}</Button>}</Panel>
 
     <div className="submoment-layout grid min-h-0 flex-1 items-stretch gap-2 min-[900px]:grid-cols-[12rem_minmax(0,1fr)_20rem] min-[1400px]:grid-cols-[13rem_minmax(0,1fr)_22rem]">
       <Panel className="flex min-h-0 flex-col overflow-hidden"><div className="shrink-0 border-b border-white/10 px-2.5 py-2"><Label>Tagged moments</Label><span className="ml-2 text-[9px] text-slate-600">{moments.length}</span></div><div className="min-h-0 flex-1 overflow-y-auto">{moments.length === 0 ? <p className="p-4 text-xs text-slate-500">There are no moments in this filter.</p> : moments.map((moment, index) => <button key={moment.id} onClick={() => selectMoment(moment)} className={`flex w-full items-center gap-1.5 border-b border-white/[.06] px-2 py-1.5 text-left transition hover:bg-white/[.06] ${selectedMoment?.id === moment.id ? "bg-leaf-400/10" : ""}`}><span className="w-4 shrink-0 text-right font-mono text-[8px] text-slate-600">{index + 1}</span><span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: moment.momentType.color }} /><span className="min-w-0 flex-1"><span className="block truncate text-[10px] font-semibold text-white">{moment.momentType.name}</span><span className="block font-mono text-[8px] text-slate-500">{formatTime(moment.startTimeSeconds)}–{formatTime(moment.endTimeSeconds)}</span></span><Badge className="px-1 py-0 text-[8px]">{moment.subMoments.length}</Badge></button>)}</div></Panel>
 
       <div className="flex min-h-0 min-w-0 flex-col">
-        <Panel className="flex min-h-0 flex-1 flex-col overflow-hidden"><div className="relative aspect-video min-h-72 shrink-0 bg-black">{sourceUrl ? <video ref={videoRef} src={sourceUrl} className="h-full w-full object-contain" playsInline onLoadedMetadata={(event) => { event.currentTarget.playbackRate = playbackRate; }} onTimeUpdate={handleTimeUpdate} onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} /> : <button type="button" onClick={() => fileInputRef.current?.click()} className="flex h-full min-h-72 w-full flex-col items-center justify-center p-6 text-center"><FileVideo size={38} className="text-leaf-400" /><h2 className="mt-3 text-sm font-bold text-white">{restoringVideo ? "Restoring the local video…" : "Select the video again"}</h2><p className="mt-1 max-w-md text-xs text-slate-500">Large videos remain available between pages while this browser tab stays open.</p>{match.video ? <p className="mt-3 rounded-md border border-white/10 bg-white/[.04] px-3 py-2 text-[10px] text-slate-400">Expected: {match.video.fileName} · {formatBytes(match.video.fileSize)}</p> : null}</button>}</div><div className="flex shrink-0 items-center justify-between gap-2 overflow-x-auto border-t border-white/10 p-2"><div className="flex min-w-max gap-1"><Button size="icon" className="h-8 w-8" disabled={selectedIndex <= 0} onClick={() => selectMoment(moments[selectedIndex - 1])}><ChevronLeft size={15} /></Button><Button size="icon" className="h-8 w-8" variant="primary" disabled={!sourceUrl || !selectedMoment} onClick={togglePlayback}>{playing ? <Pause size={15} /> : <Play size={15} />}</Button><Button size="icon" className="h-8 w-8" disabled={selectedIndex < 0 || selectedIndex >= moments.length - 1} onClick={() => selectMoment(moments[selectedIndex + 1])}><ChevronRight size={15} /></Button><div className="flex overflow-hidden rounded-md border border-white/10">{[.5, 1, 2, 4].map((rate) => <button key={rate} type="button" onClick={() => setRate(rate)} className={`h-8 px-2 text-[10px] font-semibold transition ${playbackRate === rate ? "bg-leaf-400 text-ink-950" : "bg-white/[.04] text-slate-300 hover:bg-white/[.1]"}`}>{rate}×</button>)}</div></div><span className="shrink-0 font-mono text-xs text-white">{formatTime(currentTime)} {selectedMoment ? <span className="text-slate-600">/ {formatTime(selectedMoment.endTimeSeconds)}</span> : null}</span></div></Panel>
+        <Panel className="flex min-h-0 flex-1 flex-col overflow-hidden"><div className="relative aspect-video min-h-72 shrink-0 bg-black">{sourceUrl ? <video ref={videoRef} src={sourceUrl} crossOrigin="anonymous" className="h-full w-full object-contain" playsInline onLoadedMetadata={(event) => { event.currentTarget.playbackRate = playbackRate; }} onTimeUpdate={handleTimeUpdate} onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} /> : <button type="button" onClick={() => fileInputRef.current?.click()} className="flex h-full min-h-72 w-full flex-col items-center justify-center p-6 text-center"><FileVideo size={38} className="text-leaf-400" /><h2 className="mt-3 text-sm font-bold text-white">{restoringVideo ? "Loading the match video…" : "Upload the match video"}</h2><p className="mt-1 max-w-md text-xs text-slate-500">The video will be stored privately in Cloudflare R2.</p>{match.video ? <p className="mt-3 rounded-md border border-white/10 bg-white/[.04] px-3 py-2 text-[10px] text-slate-400">Expected: {match.video.fileName} · {formatBytes(match.video.fileSize)}</p> : null}</button>}{uploading ? <div className="absolute inset-x-0 bottom-0 h-1 bg-white/10"><div className="h-full bg-cyan-300 transition-[width]" style={{ width: `${Math.round(uploadProgress * 100)}%` }} /></div> : null}</div><div className="flex shrink-0 items-center justify-between gap-2 overflow-x-auto border-t border-white/10 p-2"><div className="flex min-w-max gap-1"><Button size="icon" className="h-8 w-8" disabled={selectedIndex <= 0} onClick={() => selectMoment(moments[selectedIndex - 1])}><ChevronLeft size={15} /></Button><Button size="icon" className="h-8 w-8" variant="primary" disabled={!sourceUrl || !selectedMoment} onClick={togglePlayback}>{playing ? <Pause size={15} /> : <Play size={15} />}</Button><Button size="icon" className="h-8 w-8" disabled={selectedIndex < 0 || selectedIndex >= moments.length - 1} onClick={() => selectMoment(moments[selectedIndex + 1])}><ChevronRight size={15} /></Button><div className="flex overflow-hidden rounded-md border border-white/10">{[.5, 1, 2, 4].map((rate) => <button key={rate} type="button" onClick={() => setRate(rate)} className={`h-8 px-2 text-[10px] font-semibold transition ${playbackRate === rate ? "bg-leaf-400 text-ink-950" : "bg-white/[.04] text-slate-300 hover:bg-white/[.1]"}`}>{rate}×</button>)}</div></div><span className="shrink-0 font-mono text-xs text-white">{formatTime(currentTime)} {selectedMoment ? <span className="text-slate-600">/ {formatTime(selectedMoment.endTimeSeconds)}</span> : null}</span></div></Panel>
       </div>
 
       <Panel className="min-h-0 overflow-y-auto p-2"><div className="flex items-center justify-between"><div className="min-w-0"><Label>Identify submoment</Label><p className="truncate text-[9px] text-slate-500">{selectedMoment ? `${selectedMoment.momentType.name} · ${formatTime(currentTime)} · ${matchPeriodLabel(selectedPeriod)}` : "Select a moment"}</p></div><Crosshair className="shrink-0 text-leaf-400" size={15} /></div><div className="mt-1.5 grid grid-cols-2 gap-1">{availableSubmomentTypes.map((type) => <button key={type.id} type="button" onClick={() => chooseSubMomentType(type.id)} className={`h-7 truncate rounded border px-1.5 text-left text-[9px] font-semibold transition ${selectedSubMomentTypeId === type.id ? "text-white shadow-lg" : "border-white/10 bg-white/[.04] text-slate-400 hover:bg-white/[.08]"}`} style={selectedSubMomentTypeId === type.id ? { backgroundColor: `${type.color}35`, borderColor: type.color } : undefined}><span className="mr-1.5 inline-block h-2 w-2 rounded-full" style={{ backgroundColor: type.color }} />{type.name}</button>)}</div>{selectedMoment && availableSubmomentTypes.length === 0 ? <p className="mt-2 rounded border border-amber-300/20 bg-amber-400/10 px-2 py-1.5 text-[9px] text-amber-100">This moment has no associated submoments. Configure them in Settings.</p> : null}

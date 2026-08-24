@@ -3,6 +3,8 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireManagementWorkspace, requireWorkspace } from "@/lib/auth";
 import { getAttackDirectionAtTime, getMatchPeriodAtTime } from "@/lib/match-periods";
+import { abortMultipartUpload, deleteR2Object } from "@/lib/r2";
+import { serializeVideo } from "@/lib/video";
 
 const matchInclude = {
   video: true,
@@ -16,12 +18,12 @@ const matchInclude = {
 };
 
 function serializeMatch(match: Awaited<ReturnType<typeof prisma.match.findFirstOrThrow>> & Record<string, unknown>) {
-  const video = match.video as { fileSize: bigint } | null | undefined;
+  const video = match.video as ({ fileSize: bigint; storageKey?: string | null; uploadId?: string | null } & Record<string, unknown>) | null | undefined;
   const moments = (match.moments as unknown[] | undefined) ?? [];
   return {
     ...match,
     matchDate: match.matchDate instanceof Date ? match.matchDate.toISOString() : match.matchDate,
-    video: video ? { ...video, fileSize: Number(video.fileSize) } : null,
+    video: video ? serializeVideo(video) : null,
     momentCount: moments.length,
     moments
   };
@@ -45,7 +47,7 @@ export async function listMatches() {
     seasonId: match.seasonId,
     opponentClubId: match.opponentClubId,
     competitionId: match.competitionId,
-    video: match.video ? { ...match.video, fileSize: Number(match.video.fileSize) } : null,
+    video: match.video ? serializeVideo(match.video) : null,
     momentCount: match._count.moments
   }));
 }
@@ -149,7 +151,11 @@ export async function updateMatch(matchId: string, input: Record<string, unknown
 
 export async function deleteMatch(matchId: string) {
   const { workspace } = await requireManagementWorkspace();
-  await prisma.match.findFirstOrThrow({ where: { id: matchId, workspaceId: workspace.id }, select: { id: true } });
+  const match = await prisma.match.findFirstOrThrow({ where: { id: matchId, workspaceId: workspace.id }, include: { video: true } });
+  if (match.video?.storageKey && match.video.uploadId) {
+    await abortMultipartUpload(match.video.storageKey, match.video.uploadId).catch(() => undefined);
+  }
+  if (match.video?.storageKey) await deleteR2Object(match.video.storageKey);
   await prisma.match.delete({ where: { id: matchId } });
 }
 
@@ -174,7 +180,7 @@ export async function saveVideo(matchId: string, input: Record<string, unknown>)
       lastModified: input.lastModified ? new Date(String(input.lastModified)) : null
     }
   });
-  return { ...video, fileSize: Number(video.fileSize) };
+  return serializeVideo(video);
 }
 
 export async function getSettings() {
