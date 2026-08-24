@@ -18,6 +18,10 @@ export function ReportsClient() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const objectUrl = useRef<string | null>(null);
   const files = useRef(new Map<string, File>());
+  const playlistActiveRef = useRef(false);
+  const advancingRef = useRef(false);
+  const playRequestRef = useRef(0);
+  const remoteUrlsRef = useRef(new Map<string, string>());
   const [matches, setMatches] = useState<MatchSummary[]>([]);
   const [details, setDetails] = useState<MatchDetail[]>([]);
   const [settings, setSettings] = useState<SettingsPayload | null>(null);
@@ -36,7 +40,7 @@ export function ReportsClient() {
 
   useEffect(() => { Promise.all([apiFetch<MatchSummary[]>("/api/matches"), apiFetch<SettingsPayload>("/api/settings"), apiFetch<AccountPayload>("/api/account")]).then(([rows, config, account]) => { setMatches(rows); setSettings(config); setTeamName(account.teamName || "Team"); }).catch((error: Error) => setNotice(error.message)).finally(() => setLoading(false)); }, []);
   useEffect(() => { let cancelled = false; if (!selectedIds.length) { setDetails([]); return; } setLoadingDetails(true); Promise.all(selectedIds.map((id) => apiFetch<MatchDetail>(`/api/matches/${id}`))).then((rows) => { if (!cancelled) setDetails(rows); }).catch((error: Error) => setNotice(error.message)).finally(() => { if (!cancelled) setLoadingDetails(false); }); return () => { cancelled = true; }; }, [selectedIds]);
-  useEffect(() => () => { if (objectUrl.current) URL.revokeObjectURL(objectUrl.current); }, []);
+  useEffect(() => () => { playRequestRef.current += 1; if (objectUrl.current) URL.revokeObjectURL(objectUrl.current); }, []);
 
   const clips = useMemo<Clip[]>(() => details.flatMap((match) => match.moments.filter((moment) => !momentTypeId || moment.momentTypeId === momentTypeId).filter((moment) => !submomentTypeId || moment.subMoments.some((sub) => sub.subMomentTypeId === submomentTypeId)).map((moment) => ({ match, moment }))), [details, momentTypeId, submomentTypeId]);
   const availableSubmomentTypes = useMemo(() => {
@@ -46,6 +50,15 @@ export function ReportsClient() {
   }, [momentTypeId, settings]);
   const totalDuration = clips.reduce((sum, clip) => sum + clip.moment.durationSeconds, 0);
   const totalSubmoments = clips.reduce((sum, clip) => sum + clip.moment.subMoments.length, 0);
+
+  useEffect(() => {
+    if (!playing || clips.some((clip) => clip.moment.id === playing.clip.moment.id)) return;
+    playlistActiveRef.current = false;
+    advancingRef.current = false;
+    playRequestRef.current += 1;
+    videoRef.current?.pause();
+    setPlaying(null);
+  }, [clips, playing]);
 
   function toggleMatch(id: string) { setSelectedIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]); }
   async function getVideo(match: MatchDetail) { const file = files.current.get(match.id) || await getRememberedMatchVideo(match.id).catch(() => null); if (file) files.current.set(match.id, file); return file; }
@@ -61,10 +74,16 @@ export function ReportsClient() {
     setNotice(unmatched.length ? `Could not match: ${unmatched.join(", ")}.` : "Local videos are ready.");
   }
 
-  async function playClip(clip: Clip) {
+  async function playClip(clip: Clip, fromPlaylist = false) {
+    playlistActiveRef.current = true;
+    if (!fromPlaylist) advancingRef.current = false;
+    const request = ++playRequestRef.current;
     if (clip.match.video?.storageStatus === "READY") {
-      const remote = await getRemoteVideoUrl(clip.match.id).catch(() => null);
+      const cachedUrl = remoteUrlsRef.current.get(clip.match.id);
+      const remote = cachedUrl ? { url: cachedUrl } : await getRemoteVideoUrl(clip.match.id).catch(() => null);
+      if (request !== playRequestRef.current) return;
       if (remote) {
+        remoteUrlsRef.current.set(clip.match.id, remote.url);
         if (objectUrl.current) {
           URL.revokeObjectURL(objectUrl.current);
           objectUrl.current = null;
@@ -75,9 +94,43 @@ export function ReportsClient() {
       }
     }
     const file = await getVideo(clip.match);
-    if (!file) return setNotice(clip.match.video?.storageStatus === "READY" ? `The cloud video for “${clip.match.title}” could not be loaded.` : `Upload the video for “${clip.match.title}” from its analysis page.`);
+    if (request !== playRequestRef.current) return;
+    if (!file) {
+      playlistActiveRef.current = false;
+      setNotice(clip.match.video?.storageStatus === "READY" ? `The cloud video for “${clip.match.title}” could not be loaded.` : `Upload the video for “${clip.match.title}” from its analysis page.`);
+      return;
+    }
     if (objectUrl.current) URL.revokeObjectURL(objectUrl.current);
     objectUrl.current = URL.createObjectURL(file); setPlaying({ clip, url: objectUrl.current }); setNotice(null);
+  }
+
+  function finishClip(video: HTMLVideoElement) {
+    if (!playing || advancingRef.current || video.currentTime < playing.clip.moment.endTimeSeconds - .04) return;
+    advancingRef.current = true;
+    video.pause();
+    video.currentTime = playing.clip.moment.endTimeSeconds;
+    const selectedIndex = clips.findIndex((clip) => clip.moment.id === playing.clip.moment.id);
+    if (playlistActiveRef.current && selectedIndex >= 0 && selectedIndex < clips.length - 1) {
+      void playClip(clips[selectedIndex + 1], true).finally(() => { advancingRef.current = false; });
+    } else {
+      playlistActiveRef.current = false;
+      advancingRef.current = false;
+    }
+  }
+
+  function toggleClipPlayback() {
+    const video = videoRef.current;
+    if (!video || !playing) return;
+    if (!video.paused) {
+      playlistActiveRef.current = false;
+      video.pause();
+      return;
+    }
+    playlistActiveRef.current = true;
+    if (video.currentTime < playing.clip.moment.startTimeSeconds || video.currentTime >= playing.clip.moment.endTimeSeconds) {
+      video.currentTime = playing.clip.moment.startTimeSeconds;
+    }
+    void video.play();
   }
 
   async function exportClips() {
@@ -126,11 +179,11 @@ export function ReportsClient() {
       <div className="space-y-4"><Panel className="flex flex-wrap items-center justify-between gap-3 p-4"><div><p className="font-semibold text-white">{loadingDetails ? "Loading clips…" : `${clips.length} clips found`}</p><p className="text-xs text-slate-500">Cloud videos are used for playback. Local files are only needed for clip export.</p></div><div className="flex flex-wrap gap-2"><label className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-lg border border-white/10 bg-white/[.06] px-3 text-sm font-semibold text-slate-100 hover:bg-white/[.11]"><Upload size={15} />Load files for export<input type="file" accept="video/*" multiple className="hidden" onChange={(event) => void addVideos(event.target.files)} /></label><Button disabled={!clips.length || exporting} onClick={() => void exportClips()}><Archive size={16} />Export clips</Button></div></Panel>
       <div className={`grid gap-4 ${playing ? "lg:h-[min(62vh,42rem)] lg:min-h-[30rem] lg:grid-cols-[minmax(0,1fr)_22rem]" : ""}`}>
         {playing ? <Panel className="flex min-h-0 flex-col overflow-hidden">
-          <div className="aspect-video bg-black xl:min-h-0 xl:flex-1 xl:aspect-auto"><video key={playing.url} ref={videoRef} src={playing.url} crossOrigin="anonymous" className="h-full w-full object-contain" playsInline onLoadedMetadata={(event) => { event.currentTarget.currentTime = playing.clip.moment.startTimeSeconds; void event.currentTarget.play(); }} onTimeUpdate={(event) => { if (event.currentTarget.currentTime >= playing.clip.moment.endTimeSeconds) event.currentTarget.pause(); }} onPlay={() => setIsPlaying(true)} onPause={() => setIsPlaying(false)} /></div>
-          <div className="flex items-center justify-between gap-3 p-3"><div className="min-w-0"><p className="truncate text-sm font-semibold text-white">{playing.clip.match.title}</p><p className="truncate text-xs text-slate-500">{playing.clip.moment.momentType.name} · {formatTime(playing.clip.moment.startTimeSeconds)} – {formatTime(playing.clip.moment.endTimeSeconds)}</p></div><Button size="icon" variant="primary" onClick={() => isPlaying ? videoRef.current?.pause() : void videoRef.current?.play()}>{isPlaying ? <Pause /> : <Play />}</Button></div>
+          <div className="aspect-video bg-black xl:min-h-0 xl:flex-1 xl:aspect-auto"><video key={`${playing.url}-${playing.clip.moment.id}`} ref={videoRef} src={playing.url} crossOrigin="anonymous" className="h-full w-full object-contain" playsInline onLoadedMetadata={(event) => { event.currentTarget.currentTime = playing.clip.moment.startTimeSeconds; if (playlistActiveRef.current) void event.currentTarget.play(); }} onTimeUpdate={(event) => finishClip(event.currentTarget)} onPlay={() => setIsPlaying(true)} onPause={() => setIsPlaying(false)} /></div>
+          <div className="flex items-center justify-between gap-3 p-3"><div className="min-w-0"><p className="truncate text-sm font-semibold text-white">{playing.clip.match.title}</p><p className="truncate text-xs text-slate-500">{playing.clip.moment.momentType.name} · {formatTime(playing.clip.moment.startTimeSeconds)} – {formatTime(playing.clip.moment.endTimeSeconds)}</p></div><Button size="icon" variant="primary" onClick={toggleClipPlayback}>{isPlaying ? <Pause /> : <Play />}</Button></div>
         </Panel> : null}
         <Panel className={`overflow-hidden ${playing ? "lg:flex lg:min-h-0 lg:flex-col" : ""}`}>
-          <div className="flex items-center justify-between border-b border-white/[.08] px-3 py-2"><Label>Clips</Label><Badge>{clips.length}</Badge></div>
+          <div className="flex items-center justify-between border-b border-white/[.08] px-3 py-2"><div><Label>Clips</Label><p className="mt-1 text-[10px] text-slate-500">Select a clip; the following clips play automatically.</p></div><Badge>{clips.length}</Badge></div>
           <div className={`${playing ? "lg:min-h-0 lg:flex-1 lg:overflow-y-auto" : ""} divide-y divide-white/[.06]`}>
             {clips.length ? clips.map((clip) => <button key={clip.moment.id} onClick={() => void playClip(clip)} className={`flex w-full items-center gap-3 p-3 text-left hover:bg-white/[.05] ${playing?.clip.moment.id === clip.moment.id ? "bg-leaf-400/10" : ""}`}><Play size={15} className="shrink-0 text-leaf-400" /><span className="min-w-0 flex-1"><span className="block truncate text-sm font-semibold text-white">{clip.match.title}</span><span className="block truncate text-xs text-slate-500">{clip.moment.momentType.name} · {formatTime(clip.moment.startTimeSeconds)} – {formatTime(clip.moment.endTimeSeconds)}</span></span><Badge>{clip.moment.subMoments.length} sub.</Badge></button>) : <div className="p-10 text-center text-sm text-slate-500"><FileVideo className="mx-auto mb-3" />Select at least one match.</div>}
           </div>

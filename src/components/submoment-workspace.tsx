@@ -17,6 +17,8 @@ export function SubmomentWorkspace({ matchId }: { matchId: string }) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const uploadAbortRef = useRef<AbortController | null>(null);
+  const playlistActiveRef = useRef(false);
+  const advancingRef = useRef(false);
   const [match, setMatch] = useState<MatchDetail | null>(null);
   const [settings, setSettings] = useState<SettingsPayload | null>(null);
   const [sourceUrl, setSourceUrl] = useState<string | null>(null);
@@ -43,6 +45,7 @@ export function SubmomentWorkspace({ matchId }: { matchId: string }) {
     Promise.all([apiFetch<MatchDetail>(`/api/matches/${matchId}`), apiFetch<SettingsPayload>("/api/settings")])
       .then(async ([matchData, settingsData]) => {
         if (!active) return;
+        playlistActiveRef.current = true;
         setMatch(matchData);
         setSettings(settingsData);
         setSelectedMomentId(matchData.moments[0]?.id || null);
@@ -83,6 +86,34 @@ export function SubmomentWorkspace({ matchId }: { matchId: string }) {
   const goalMarkers = useMemo(() => (selectedMoment?.subMoments || []).filter((sub) => sub.goalX !== null && sub.goalY !== null).map((sub) => ({ id: sub.id, x: sub.goalX!, y: sub.goalY!, color: sub.subMomentType.color, label: sub.subMomentType.name, details: [sub.timeSeconds === null ? "Time not recorded" : `Time: ${formatTime(sub.timeSeconds)}`, `Match: ${match?.title || "Unknown"}`] })), [match?.title, selectedMoment]);
 
   useEffect(() => {
+    if (!selectedMoment) return;
+    advancingRef.current = false;
+    setCurrentTime(selectedMoment.startTimeSeconds);
+    setFieldPoint(null);
+    setGoalPoint(null);
+    setEditingSubmomentId(null);
+    const video = videoRef.current;
+    if (!video) return;
+    video.pause();
+    video.currentTime = selectedMoment.startTimeSeconds;
+    if (playlistActiveRef.current) void video.play();
+  }, [selectedMoment?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!sourceUrl || !selectedMoment || !video) return;
+    const startSelectedMoment = () => {
+      video.playbackRate = playbackRate;
+      video.currentTime = selectedMoment.startTimeSeconds;
+      setCurrentTime(selectedMoment.startTimeSeconds);
+      if (playlistActiveRef.current) void video.play();
+    };
+    if (video.readyState >= 1) startSelectedMoment();
+    else video.addEventListener("loadedmetadata", startSelectedMoment, { once: true });
+    return () => video.removeEventListener("loadedmetadata", startSelectedMoment);
+  }, [sourceUrl]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
     if (availableSubmomentTypes.some((type) => type.id === selectedSubMomentTypeId)) return;
     setSelectedSubMomentTypeId(availableSubmomentTypes[0]?.id || "");
     setFieldPoint(null);
@@ -119,35 +150,42 @@ export function SubmomentWorkspace({ matchId }: { matchId: string }) {
     }
   }
 
-  function selectMoment(moment: MomentRecord, play = false) {
-    setSelectedMomentId(moment.id);
-    setFieldPoint(null);
-    setGoalPoint(null);
+  function selectMoment(moment: MomentRecord) {
+    playlistActiveRef.current = true;
+    advancingRef.current = false;
+    if (moment.id !== selectedMoment?.id) {
+      setSelectedMomentId(moment.id);
+      return;
+    }
     const video = videoRef.current;
     if (!video) return;
     video.currentTime = moment.startTimeSeconds;
     setCurrentTime(moment.startTimeSeconds);
-    if (play) void video.play(); else video.pause();
+    void video.play();
   }
 
   function changeFilter(typeId: string) {
     setFilterTypeId(typeId);
     const first = match?.moments.find((moment) => !typeId || moment.momentTypeId === typeId) || null;
-    setSelectedMomentId(first?.id || null);
-    if (first && videoRef.current) {
-      videoRef.current.pause();
-      videoRef.current.currentTime = first.startTimeSeconds;
-      setCurrentTime(first.startTimeSeconds);
+    playlistActiveRef.current = Boolean(first);
+    advancingRef.current = false;
+    if (!first) {
+      setSelectedMomentId(null);
+      videoRef.current?.pause();
+      return;
     }
+    selectMoment(first);
   }
 
   function togglePlayback() {
     const video = videoRef.current;
     if (!video || !selectedMoment) return;
     if (!video.paused) {
+      playlistActiveRef.current = false;
       video.pause();
       return;
     }
+    playlistActiveRef.current = true;
     if (video.currentTime < selectedMoment.startTimeSeconds || video.currentTime >= selectedMoment.endTimeSeconds) video.currentTime = selectedMoment.startTimeSeconds;
     void video.play();
   }
@@ -161,13 +199,21 @@ export function SubmomentWorkspace({ matchId }: { matchId: string }) {
     const video = videoRef.current;
     if (!video || !selectedMoment) return;
     setCurrentTime(video.currentTime);
-    if (video.currentTime < selectedMoment.endTimeSeconds - .04) return;
+    if (video.currentTime < selectedMoment.endTimeSeconds - .04 || advancingRef.current) return;
+    advancingRef.current = true;
     video.pause();
     video.currentTime = selectedMoment.endTimeSeconds;
     setCurrentTime(selectedMoment.endTimeSeconds);
+    if (playlistActiveRef.current && selectedIndex >= 0 && selectedIndex < moments.length - 1) {
+      setSelectedMomentId(moments[selectedIndex + 1].id);
+    } else {
+      playlistActiveRef.current = false;
+      advancingRef.current = false;
+    }
   }
 
   function chooseSubMomentType(typeId: string) {
+    playlistActiveRef.current = false;
     setSelectedSubMomentTypeId(typeId);
     setFieldPoint(null);
     setGoalPoint(null);
@@ -176,6 +222,7 @@ export function SubmomentWorkspace({ matchId }: { matchId: string }) {
   }
 
   function editSubmoment(submoment: SubMomentRecord) {
+    playlistActiveRef.current = false;
     setEditingSubmomentId(submoment.id);
     setSelectedSubMomentTypeId(submoment.subMomentTypeId);
     setFieldPoint(submoment.fieldX !== null && submoment.fieldY !== null ? { x: submoment.fieldX, y: submoment.fieldY } : null);
