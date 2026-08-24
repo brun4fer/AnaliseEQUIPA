@@ -27,6 +27,7 @@ model User {
   updatedAt          DateTime @updatedAt
 
   workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+  presences WorkspacePresence[]
 
   @@index([workspaceId])
 }
@@ -46,6 +47,24 @@ model Workspace {
   matches        Match[]
   momentTypes    MomentType[]
   subMomentTypes SubMomentType[]
+  presences      WorkspacePresence[]
+}
+
+model WorkspacePresence {
+  id          String   @id @default(cuid())
+  workspaceId String
+  userId      String
+  clientId    String
+  lastSeenAt  DateTime
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, clientId])
+  @@index([workspaceId, lastSeenAt])
+  @@index([userId])
 }
 
 model Season {

@@ -2,10 +2,11 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
-import { BarChart3, CircleHelp, Goal, Home, LockKeyhole, LogOut, Map, Plus, Settings, Wrench } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { AlertTriangle, BarChart3, CircleHelp, Goal, Home, LockKeyhole, LogOut, Map, Plus, Settings, Wrench } from "lucide-react";
 
 import { ManagementAccessDialog } from "@/components/management-access-dialog";
+import { Button, Label, Panel } from "@/components/ui";
 import { cn } from "@/lib/cn";
 import type { AccountPayload } from "@/lib/domain";
 import { apiFetch } from "@/lib/http";
@@ -20,27 +21,84 @@ const links = [
   { href: "/help", label: "Help", icon: CircleHelp, protected: false },
 ];
 
+const PUBLIC_PATHS = ["/login", "/register", "/change-password", "/onboarding"];
+const PRESENCE_CLIENT_KEY = "analise-equipa-presence-client";
+type Presence = { activeElsewhere: boolean; otherActiveSessions: number };
+
+function getPresenceClientId() {
+  const existing = window.localStorage.getItem(PRESENCE_CLIENT_KEY);
+  if (existing && /^[a-zA-Z0-9_-]{16,100}$/.test(existing)) return existing;
+  const created = window.crypto.randomUUID();
+  window.localStorage.setItem(PRESENCE_CLIENT_KEY, created);
+  return created;
+}
+
 function isManagementPath(pathname: string) {
   return pathname === "/" || pathname.startsWith("/matches") || pathname.startsWith("/maintenance") || pathname.startsWith("/settings") || pathname.startsWith("/analysis");
 }
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const presenceClientIdRef = useRef<string | null>(null);
   const [account, setAccount] = useState<AccountPayload | null>(null);
   const [showManagementAccess, setShowManagementAccess] = useState(false);
   const [pendingHref, setPendingHref] = useState<string | null>(null);
+  const [presence, setPresence] = useState<Presence | null>(null);
+  const [presenceAcknowledged, setPresenceAcknowledged] = useState(false);
+  const isPublic = PUBLIC_PATHS.includes(pathname);
+
   useEffect(() => {
-    if (!["/login", "/register", "/change-password", "/onboarding"].includes(pathname)) {
+    if (!isPublic) {
       apiFetch<AccountPayload>("/api/account").then((next) => {
         setAccount(next);
         if (!next.managementAccess.configured || (isManagementPath(pathname) && !next.managementAccess.unlocked)) setShowManagementAccess(true);
       }).catch(() => undefined);
     }
-  }, [pathname]);
-  if (pathname === "/login" || pathname === "/register" || pathname === "/change-password" || pathname === "/onboarding") return <main className="min-h-screen">{children}</main>;
+  }, [isPublic, pathname]);
+
+  useEffect(() => {
+    if (isPublic) return;
+    let stopped = false;
+    let clientId: string;
+    try {
+      clientId = getPresenceClientId();
+      presenceClientIdRef.current = clientId;
+    } catch {
+      return;
+    }
+
+    async function heartbeat() {
+      try {
+        const next = await apiFetch<Presence>("/api/presence", { method: "POST", body: JSON.stringify({ clientId }) });
+        if (stopped) return;
+        setPresence(next);
+        if (!next.activeElsewhere) setPresenceAcknowledged(false);
+      } catch {
+        // A temporary network failure must not interrupt an ongoing analysis.
+      }
+    }
+
+    void heartbeat();
+    const timer = window.setInterval(() => void heartbeat(), 20_000);
+    const refreshPresence = () => { if (document.visibilityState === "visible") void heartbeat(); };
+    window.addEventListener("focus", refreshPresence);
+    document.addEventListener("visibilitychange", refreshPresence);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refreshPresence);
+      document.removeEventListener("visibilitychange", refreshPresence);
+    };
+  }, [isPublic]);
+
+  if (isPublic) return <main className="min-h-screen">{children}</main>;
 
   async function logout() {
-    await fetch("/api/auth/logout", { method: "POST" });
+    let clientId = presenceClientIdRef.current;
+    if (!clientId) {
+      try { clientId = getPresenceClientId(); } catch { clientId = null; }
+    }
+    await apiFetch("/api/auth/logout", { method: "POST", body: JSON.stringify({ clientId }) }).catch(() => undefined);
     window.location.href = "/login";
   }
 
@@ -97,6 +155,19 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
       </header>
       <main className="mx-auto max-w-[1800px] px-2 py-3 sm:px-4">{children}</main>
+      {presence?.activeElsewhere && !presenceAcknowledged ? <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/80 p-4 backdrop-blur-md" role="alertdialog" aria-modal="true" aria-labelledby="concurrent-access-title" aria-describedby="concurrent-access-description">
+        <Panel className="w-full max-w-lg overflow-hidden border-amber-300/30 bg-pitch-950 p-5 shadow-2xl sm:p-6">
+          <div className="flex h-11 w-11 items-center justify-center rounded-lg border border-amber-300/30 bg-amber-300/10 text-amber-200"><AlertTriangle size={22} /></div>
+          <Label className="mt-4 block text-amber-300/70">Concurrent workspace access</Label>
+          <h2 id="concurrent-access-title" className="mt-1 text-xl font-bold text-white">Another person is currently using this workspace</h2>
+          <p id="concurrent-access-description" className="mt-2 text-sm leading-relaxed text-slate-400">This workspace is active in another browser or device. Editing matches at the same time can create conflicting analysis data. Please coordinate with the other person before continuing.</p>
+          {presence.otherActiveSessions > 1 ? <p className="mt-2 text-xs text-amber-200">{presence.otherActiveSessions} other active sessions were detected.</p> : null}
+          <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <Button onClick={() => setPresenceAcknowledged(true)}>Continue anyway</Button>
+            <Button variant="primary" onClick={() => void logout()}><LogOut size={15} />Sign out</Button>
+          </div>
+        </Panel>
+      </div> : null}
       {showManagementAccess && account ? <ManagementAccessDialog configured={account.managementAccess.configured} canDismiss={!isManagementPath(pathname)} onDismiss={() => { setShowManagementAccess(false); setPendingHref(null); }} onUnlocked={() => {
         setAccount({ ...account, managementAccess: { configured: true, unlocked: true } });
         setShowManagementAccess(false);
