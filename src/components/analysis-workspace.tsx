@@ -294,9 +294,13 @@ export function AnalysisWorkspace({ matchId }: { matchId: string }) {
   async function exportAllMoments() {
     if (!match || match.moments.length === 0 || exporting) return;
 
-    const file = sourceFileRef.current || await getRememberedMatchVideo(match.id).catch(() => null);
-    if (!file) {
-      setNotice("Select the local match video before exporting all moments.");
+    const localFile = sourceFileRef.current || await getRememberedMatchVideo(match.id).catch(() => null);
+    const remote = !localFile && match.video?.storageStatus === "READY"
+      ? await getRemoteVideoUrl(match.id).catch(() => null)
+      : null;
+    const exportSource: File | string | null = localFile || remote?.url || null;
+    if (!exportSource) {
+      setNotice("The cloud video is not available. Select the local match video to continue.");
       fileInputRef.current?.click();
       return;
     }
@@ -318,9 +322,9 @@ export function AnalysisWorkspace({ matchId }: { matchId: string }) {
     const root = `${safeExportName(match.title)}-${moments.length}-clips`;
     const archive = directory ? null : new (await import("jszip")).default();
     const indexRows = [["moment", "start", "end", "submoments", "files"]];
-    const exportUrl = sourceUrl || URL.createObjectURL(file);
-    const ownsExportUrl = !sourceUrl;
-    const session = new SmartVideoExportSession(file);
+    const exportUrl = typeof exportSource === "string" ? exportSource : sourceUrl || URL.createObjectURL(exportSource);
+    const ownsExportUrl = typeof exportSource !== "string" && !sourceUrl;
+    const session = new SmartVideoExportSession(exportSource);
 
     try {
       for (const [index, moment] of moments.entries()) {

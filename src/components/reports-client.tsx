@@ -63,6 +63,17 @@ export function ReportsClient() {
   function toggleMatch(id: string) { setSelectedIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]); }
   async function getVideo(match: MatchDetail) { const file = files.current.get(match.id) || await getRememberedMatchVideo(match.id).catch(() => null); if (file) files.current.set(match.id, file); return file; }
 
+  async function getExportSource(match: MatchDetail) {
+    const file = await getVideo(match);
+    if (file) {
+      const url = URL.createObjectURL(file);
+      return { source: file as File | string, url, release: () => URL.revokeObjectURL(url) };
+    }
+    if (match.video?.storageStatus !== "READY") return null;
+    const remote = await getRemoteVideoUrl(match.id).catch(() => null);
+    return remote ? { source: remote.url as File | string, url: remote.url, release: () => undefined } : null;
+  }
+
   async function addVideos(list: FileList | null) {
     if (!list) return;
     const unmatched: string[] = [];
@@ -145,18 +156,20 @@ export function ReportsClient() {
     try {
       const groups = new Map<string, Clip[]>(); for (const clip of clips) groups.set(clip.match.id, [...(groups.get(clip.match.id) || []), clip]);
       for (const group of groups.values()) {
-        const match = group[0].match; const file = await getVideo(match); if (!file) throw new Error(`Load the local video for “${match.title}” before exporting.`);
-        const url = URL.createObjectURL(file); const session = new SmartVideoExportSession(file);
+        const match = group[0].match;
+        const exportVideo = await getExportSource(match);
+        if (!exportVideo) throw new Error(`The cloud video for “${match.title}” is not available. Load the local file to continue.`);
+        const session = new SmartVideoExportSession(exportVideo.source);
         try {
           for (const clip of group) {
             completed += 1; setStatus(`Exporting ${completed} of ${clips.length}: ${clip.match.title}`);
-            const result = await session.exportMoment({ match: clip.match, moment: clip.moment, quality, sourceUrlFallback: url, onStatus: (message) => setStatus(`${completed} of ${clips.length}: ${message}`) });
+            const result = await session.exportMoment({ match: clip.match, moment: clip.moment, quality, sourceUrlFallback: exportVideo.url, onStatus: (message) => setStatus(`${completed} of ${clips.length}: ${message}`) });
             const folders = [...new Set(clip.moment.subMoments.map((item) => item.subMomentType.name))]; if (!folders.length) folders.push("No submoment");
             const fileName = `${String(completed).padStart(3, "0")}-${result.fileName}`; const paths = folders.map((folder) => `${safeName(clip.moment.momentType.name)}/${safeName(folder)}/${fileName}`);
             for (const path of paths) { if (directory) await writeBlobToDirectory(directory, `${root}/${path}`, result.blob); else archive?.file(`${root}/${path}`, result.blob); }
             indexRows.push([clip.match.title, clip.moment.momentType.name, String(clip.moment.startTimeSeconds), String(clip.moment.endTimeSeconds), folders.join(" | "), paths.join(" | ")]);
           }
-        } finally { session.dispose(); URL.revokeObjectURL(url); }
+        } finally { session.dispose(); exportVideo.release(); }
       }
       const csv = new Blob([toCsv(indexRows)], { type: "text/csv;charset=utf-8" });
       if (directory) await writeBlobToDirectory(directory, `${root}/report-index.csv`, csv);
@@ -176,7 +189,7 @@ export function ReportsClient() {
     <div className="grid gap-4 md:grid-cols-3"><Metric label="Clips" value={clips.length} /><Metric label="Clip duration" value={formatTime(totalDuration)} /><Metric label="Submoments" value={totalSubmoments} /></div>
     <Panel className="grid gap-4 p-4 md:grid-cols-3"><label className="grid gap-2"><Label>Moment</Label><Select value={momentTypeId} onChange={(event) => { setMomentTypeId(event.target.value); setSubmomentTypeId(""); }}><option value="">All moments</option>{settings?.momentTypes.map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}</Select></label><label className="grid gap-2"><Label>Submoment</Label><Select value={submomentTypeId} onChange={(event) => setSubmomentTypeId(event.target.value)}><option value="">All submoments</option>{availableSubmomentTypes.map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}</Select></label><label className="grid gap-2"><Label>Export quality</Label><Select value={quality} onChange={(event) => setQuality(event.target.value as ExportQuality)}>{exportQualityOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</Select><span className="text-[10px] text-slate-500">{exportQualityOptions.find((item) => item.value === quality)?.detail}</span></label></Panel>
     <div className="grid gap-5 xl:grid-cols-[22rem_minmax(0,1fr)]"><Panel className="overflow-hidden"><div className="flex gap-2 border-b border-white/10 p-3"><Button size="sm" onClick={() => setSelectedIds(matches.map((item) => item.id))}><CheckSquare size={14} />Select all</Button><Button size="sm" onClick={() => setSelectedIds([])}>Clear</Button></div><div className="max-h-[42rem] overflow-y-auto">{matches.map((match) => <button key={match.id} onClick={() => toggleMatch(match.id)} className={`flex w-full items-start gap-3 border-b border-white/[.06] p-3 text-left hover:bg-white/[.06] ${selectedIds.includes(match.id) ? "bg-leaf-400/10" : ""}`}>{selectedIds.includes(match.id) ? <CheckSquare size={17} className="text-leaf-400" /> : <Square size={17} className="text-slate-600" />}<span className="min-w-0"><span className="block truncate text-sm font-semibold text-white">{match.title}</span><span className="text-xs text-slate-500">{match.momentCount} moments · {match.video?.fileName || "No video"}</span></span></button>)}</div></Panel>
-      <div className="space-y-4"><Panel className="flex flex-wrap items-center justify-between gap-3 p-4"><div><p className="font-semibold text-white">{loadingDetails ? "Loading clips…" : `${clips.length} clips found`}</p><p className="text-xs text-slate-500">Cloud videos are used for playback. Local files are only needed for clip export.</p></div><div className="flex flex-wrap gap-2"><label className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-lg border border-white/10 bg-white/[.06] px-3 text-sm font-semibold text-slate-100 hover:bg-white/[.11]"><Upload size={15} />Load files for export<input type="file" accept="video/*" multiple className="hidden" onChange={(event) => void addVideos(event.target.files)} /></label><Button disabled={!clips.length || exporting} onClick={() => void exportClips()}><Archive size={16} />Export clips</Button></div></Panel>
+      <div className="space-y-4"><Panel className="flex flex-wrap items-center justify-between gap-3 p-4"><div><p className="font-semibold text-white">{loadingDetails ? "Loading clips…" : `${clips.length} clips found`}</p><p className="text-xs text-slate-500">Cloud videos are used automatically. Local files remain available as a faster fallback.</p></div><div className="flex flex-wrap gap-2"><label className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-lg border border-white/10 bg-white/[.06] px-3 text-sm font-semibold text-slate-100 hover:bg-white/[.11]"><Upload size={15} />Load local fallback<input type="file" accept="video/*" multiple className="hidden" onChange={(event) => void addVideos(event.target.files)} /></label><Button disabled={!clips.length || exporting} onClick={() => void exportClips()}><Archive size={16} />Export clips</Button></div></Panel>
       <div className={`grid gap-4 ${playing ? "lg:h-[min(62vh,42rem)] lg:min-h-[30rem] lg:grid-cols-[minmax(0,1fr)_22rem]" : ""}`}>
         {playing ? <Panel className="flex min-h-0 flex-col overflow-hidden">
           <div className="aspect-video bg-black xl:min-h-0 xl:flex-1 xl:aspect-auto"><video key={`${playing.url}-${playing.clip.moment.id}`} ref={videoRef} src={playing.url} crossOrigin="anonymous" className="h-full w-full object-contain" playsInline onLoadedMetadata={(event) => { event.currentTarget.currentTime = playing.clip.moment.startTimeSeconds; if (playlistActiveRef.current) void event.currentTarget.play(); }} onTimeUpdate={(event) => finishClip(event.currentTarget)} onPlay={() => setIsPlaying(true)} onPause={() => setIsPlaying(false)} /></div>
