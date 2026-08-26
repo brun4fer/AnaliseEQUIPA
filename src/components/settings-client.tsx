@@ -5,6 +5,7 @@ import { Crosshair, Keyboard, Loader2, Pencil, Plus, Save, Target, Trash2, X } f
 
 import { Badge, Button, Input, Label, Panel } from "@/components/ui";
 import { ManagementPasswordPanel } from "@/components/management-password-panel";
+import { MediaLibraryLinkPanel } from "@/components/media-library-link-panel";
 import type { MomentTypeRecord, SettingsPayload, SubMomentTypeRecord } from "@/lib/domain";
 import { apiFetch } from "@/lib/http";
 
@@ -172,6 +173,8 @@ export function SettingsClient() {
       ) : null}
 
       <ManagementPasswordPanel />
+
+      <MediaLibraryLinkPanel />
 
       <div className="grid items-start gap-5 xl:grid-cols-[24rem_minmax(0,1fr)]">
         <Panel className="overflow-hidden xl:sticky xl:top-24">

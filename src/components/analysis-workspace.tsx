@@ -3,8 +3,9 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Archive, ArrowLeft, Check, ChevronLeft, ChevronRight, Clock3, FileVideo, Loader2, Pause, Pencil, Play, Settings2, Tags, Trash2, Upload, X } from "lucide-react";
+import { Archive, ArrowLeft, Check, ChevronLeft, ChevronRight, Clock3, Cloud, FileVideo, Loader2, Pause, Pencil, Play, Settings2, Tags, Trash2, Upload, X } from "lucide-react";
 
+import { CloudVideoLibrary } from "@/components/cloud-video-library";
 import { MatchEditDialog } from "@/components/match-edit-dialog";
 import { MomentEditDialog } from "@/components/moment-edit-dialog";
 import { Badge, Button, Label, Panel } from "@/components/ui";
@@ -13,7 +14,7 @@ import { isExportPickerCancellation, pickExportDirectory, writeBlobToDirectory }
 import { apiFetch } from "@/lib/http";
 import { getRememberedMatchVideo, rememberMatchVideo } from "@/lib/local-video-store";
 import { getMatchPeriodAtTime } from "@/lib/match-periods";
-import { getRemoteVideoUrl, uploadMatchVideo } from "@/lib/remote-video-store";
+import { attachCloudVideo, getCloudVideoLibrary, getRemoteVideoUrl, uploadMatchVideo, type CloudVideoAsset } from "@/lib/remote-video-store";
 import { SmartVideoExportSession } from "@/lib/smart-video-export";
 import { formatBytes, formatTime, roundTime } from "@/lib/time";
 import { downloadBlob } from "@/lib/video-export";
@@ -61,6 +62,11 @@ export function AnalysisWorkspace({ matchId }: { matchId: string }) {
   const [exportStatus, setExportStatus] = useState("");
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [showCloudLibrary, setShowCloudLibrary] = useState(false);
+  const [cloudAssets, setCloudAssets] = useState<CloudVideoAsset[]>([]);
+  const [loadingCloudLibrary, setLoadingCloudLibrary] = useState(false);
+  const [cloudLibraryError, setCloudLibraryError] = useState<string | null>(null);
+  const [attachingAssetId, setAttachingAssetId] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -130,6 +136,42 @@ export function AnalysisWorkspace({ matchId }: { matchId: string }) {
 
   function cancelUpload() {
     uploadAbortRef.current?.abort();
+  }
+
+  async function openCloudLibrary() {
+    setShowCloudLibrary(true);
+    setLoadingCloudLibrary(true);
+    setCloudLibraryError(null);
+    try {
+      const result = await getCloudVideoLibrary();
+      setCloudAssets(result.assets);
+    } catch (error) {
+      setCloudLibraryError(error instanceof Error ? error.message : "Could not load the cloud library.");
+    } finally {
+      setLoadingCloudLibrary(false);
+    }
+  }
+
+  async function attachSelectedCloudVideo(asset: CloudVideoAsset) {
+    setAttachingAssetId(asset.id);
+    setCloudLibraryError(null);
+    try {
+      await attachCloudVideo(matchId, asset.id);
+      const [remote, savedMatch] = await Promise.all([
+        getRemoteVideoUrl(matchId),
+        apiFetch<MatchDetail>(`/api/matches/${matchId}`),
+      ]);
+      sourceFileRef.current = null;
+      setSourceUrl(remote.url);
+      setDuration(asset.durationSeconds);
+      setMatch(savedMatch);
+      setShowCloudLibrary(false);
+      setNotice(`Using ${asset.fileName} from the shared cloud library.`);
+    } catch (error) {
+      setCloudLibraryError(error instanceof Error ? error.message : "Could not attach the selected cloud video.");
+    } finally {
+      setAttachingAssetId(null);
+    }
   }
 
   const createMoment = useCallback(async (type: MomentTypeRecord, startTimeSeconds: number, endTimeSeconds: number) => {
@@ -399,7 +441,7 @@ export function AnalysisWorkspace({ matchId }: { matchId: string }) {
       <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto px-2 py-1.5" aria-label="Main moments in configured order">
         {settings.momentTypes.filter((type) => type.active).map((type) => { const active = activeMoments.some((item) => item.momentTypeId === type.id); return <button key={type.id} type="button" onClick={() => toggleMoment(type)} title={`${type.name}${type.defaultShortcut ? ` · ${type.defaultShortcut.toUpperCase()}` : ""}`} className={`flex h-12 min-w-[6.5rem] shrink-0 items-center justify-between gap-2 rounded-md border px-2 text-left transition ${active ? "text-white shadow-[0_0_16px_rgba(34,211,238,.18)]" : "border-white/10 bg-white/[.035] hover:bg-white/[.08]"}`} style={active ? { backgroundColor: `${type.color}30`, borderColor: type.color } : undefined}><span className="min-w-0"><span className="block truncate text-[10px] font-bold" style={{ color: type.color }}>{type.name}</span><span className={`mt-0.5 block text-[8px] ${active ? "text-white" : "text-slate-600"}`}>{active ? "In progress" : "Click to start"}</span></span><kbd className="rounded border border-white/10 bg-black/25 px-1.5 py-0.5 text-[9px] text-slate-300">{type.defaultShortcut || "—"}</kbd></button>; })}
       </div>
-      <div className="flex shrink-0 items-center border-l border-white/10 px-2">{uploading ? <Button size="sm" variant="danger" className="h-8 whitespace-nowrap" onClick={cancelUpload}><X size={13} />Cancel {Math.round(uploadProgress * 100)}%</Button> : <Button size="sm" className="h-8 whitespace-nowrap" onClick={() => fileInputRef.current?.click()}><Upload size={13} />{match.video?.storageStatus === "READY" ? "Replace video" : "Upload video"}</Button>}</div>
+      <div className="flex shrink-0 items-center gap-1.5 border-l border-white/10 px-2">{uploading ? <Button size="sm" variant="danger" className="h-8 whitespace-nowrap" onClick={cancelUpload}><X size={13} />Cancel {Math.round(uploadProgress * 100)}%</Button> : <><Button size="sm" className="h-8 whitespace-nowrap" onClick={() => fileInputRef.current?.click()}><Upload size={13} />Upload new</Button><Button size="sm" className="h-8 whitespace-nowrap" disabled={uploading} onClick={() => void openCloudLibrary()}><Cloud size={13} />Cloud library</Button></>}</div>
     </Panel>
     {notice ? <div role="status" aria-live="polite" className="fixed bottom-4 right-4 z-50 flex max-w-sm items-start gap-3 rounded-xl border border-leaf-400/25 bg-pitch-950/95 px-4 py-3 text-sm text-emerald-100 shadow-2xl backdrop-blur-xl"><span className="min-w-0 flex-1">{notice}</span><button type="button" aria-label="Dismiss message" onClick={() => setNotice(null)} className="shrink-0 text-emerald-200/70 transition hover:text-white"><X size={15} /></button></div> : null}
     {exporting ? <div role="status" aria-live="polite" className="fixed bottom-4 right-4 z-50 flex max-w-sm items-center gap-3 rounded-xl border border-leaf-400/25 bg-pitch-950/95 px-4 py-3 text-sm text-emerald-100 shadow-2xl backdrop-blur-xl"><Loader2 size={16} className="shrink-0 animate-spin" /><span className="min-w-0 flex-1">{exportStatus}</span></div> : null}
@@ -438,6 +480,7 @@ export function AnalysisWorkspace({ matchId }: { matchId: string }) {
 
     {editingMoment ? <MomentEditDialog moment={editingMoment} momentTypes={settings.momentTypes} currentTime={currentTime} duration={duration || match.video?.durationSeconds || 0} onSave={(input) => updateMoment(editingMoment, input)} onClose={() => setEditingMoment(null)} /> : null}
     {editingMatch ? <MatchEditDialog match={match} onSave={saveMatch} onDelete={removeCurrentMatch} onClose={() => setEditingMatch(false)} /> : null}
+    {showCloudLibrary ? <CloudVideoLibrary assets={cloudAssets} loading={loadingCloudLibrary} error={cloudLibraryError} attachingAssetId={attachingAssetId} onRetry={() => void openCloudLibrary()} onClose={() => !attachingAssetId && setShowCloudLibrary(false)} onSelect={(asset) => void attachSelectedCloudVideo(asset)} /> : null}
   </div>;
 }
 
