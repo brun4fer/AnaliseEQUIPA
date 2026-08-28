@@ -1,8 +1,8 @@
-const CACHE_NAME = "team-analysis-v3";
-const APP_SHELL = ["/", "/manifest.webmanifest", "/icon.svg"];
+const CACHE_NAME = "team-analysis-install-v4";
+const INSTALL_ASSETS = ["/manifest.webmanifest", "/icon.svg"];
 
 self.addEventListener("install", (event) => {
-  event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)).then(() => self.skipWaiting()));
+  event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(INSTALL_ASSETS)).then(() => self.skipWaiting()));
 });
 
 self.addEventListener("activate", (event) => {
@@ -11,9 +11,6 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
-  if (event.request.method !== "GET" || url.origin !== self.location.origin || url.pathname.startsWith("/api/") || url.pathname.includes("webpack-hmr")) return;
-  event.respondWith(fetch(event.request).then((response) => {
-    if (response.ok) caches.open(CACHE_NAME).then((cache) => cache.put(event.request, response.clone()));
-    return response;
-  }).catch(() => caches.match(event.request).then((response) => response || caches.match("/"))));
+  if (event.request.method !== "GET" || url.origin !== self.location.origin || !INSTALL_ASSETS.includes(url.pathname)) return;
+  event.respondWith(caches.match(event.request).then((cached) => cached || fetch(event.request)));
 });

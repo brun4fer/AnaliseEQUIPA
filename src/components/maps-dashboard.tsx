@@ -25,7 +25,7 @@ export function MapsDashboard() {
   const [points, setPoints] = useState<MapPoint[]>([]);
   const [matches, setMatches] = useState<MatchSummary[]>([]);
   const [settings, setSettings] = useState<SettingsPayload | null>(null);
-  const [matchId, setMatchId] = useState("");
+  const [matchId, setMatchId] = useState("unselected");
   const [momentTypeId, setMomentTypeId] = useState("");
   const [submomentTypeId, setSubmomentTypeId] = useState("");
   const [period, setPeriod] = useState<MapPeriod>("both");
@@ -51,11 +51,12 @@ export function MapsDashboard() {
     return settings.subMomentTypes.filter((type) => allowedIds.has(type.id));
   }, [momentTypeId, settings]);
 
-  const baseFiltered = useMemo(() => points.filter((point) =>
-    (!matchId || point.matchId === matchId)
+  const hasMatchSelection = matchId !== "unselected";
+  const baseFiltered = useMemo(() => !hasMatchSelection ? [] : points.filter((point) =>
+    (matchId === "all" || point.matchId === matchId)
     && (!momentTypeId || point.momentTypeId === momentTypeId)
     && (!submomentTypeId || point.subMomentTypeId === submomentTypeId)
-  ), [matchId, momentTypeId, points, submomentTypeId]);
+  ), [hasMatchSelection, matchId, momentTypeId, points, submomentTypeId]);
   const filtered = useMemo(() => baseFiltered.filter((point) => period === "both" ? point.period !== null : point.period === period), [baseFiltered, period]);
   const selectedPoint = filtered.find((point) => point.id === selectedPointId) || null;
   const selectedClipStart = selectedPoint?.momentStartTimeSeconds ?? 0;
@@ -176,16 +177,16 @@ export function MapsDashboard() {
     <div><p className="text-xs font-bold uppercase tracking-[.22em] text-leaf-400">Spatial analysis</p><h1 className="mt-2 text-3xl font-bold text-white">Occurrence maps</h1><p className="mt-2 text-sm text-slate-400">Original coordinates: first-half attacks run left to right and second-half attacks run right to left.</p></div>
     {error ? <Panel className="border-red-400/20 p-4 text-red-100">{error}</Panel> : null}
     <Panel className="grid grid-cols-2 gap-4 p-4 xl:grid-cols-[1fr_1fr_1fr_.8fr_auto] xl:items-end">
-      <label className="grid gap-2"><Label>Match</Label><Select value={matchId} onChange={(event) => setMatchId(event.target.value)}><option value="">All matches</option>{matches.map((match) => <option key={match.id} value={match.id}>{match.title}</option>)}</Select></label>
+      <label className="grid gap-2"><Label>Match</Label><Select value={matchId} onChange={(event) => setMatchId(event.target.value)}><option value="unselected" disabled>Select a match</option><option value="all">All matches</option>{matches.map((match) => <option key={match.id} value={match.id}>{match.title}</option>)}</Select></label>
       <label className="grid gap-2"><Label>Moment</Label><Select value={momentTypeId} onChange={(event) => changeMomentType(event.target.value)}><option value="">All moments</option>{settings?.momentTypes.map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}</Select></label>
       <label className="grid gap-2"><Label>Submoment</Label><Select value={submomentTypeId} onChange={(event) => setSubmomentTypeId(event.target.value)}><option value="">All submoments</option>{availableSubmomentTypes.map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}</Select></label>
       <label className="grid gap-2"><Label>Match period</Label><Select value={period} onChange={(event) => setPeriod(event.target.value as MapPeriod)}><option value="both">Both halves</option><option value="first_half">1st half</option><option value="second_half">2nd half</option></Select></label>
-      <div className="grid gap-1"><Badge className="h-10 justify-center px-4"><Filter size={14} className="mr-2" />{filtered.length} occurrences</Badge>{unassignedCount > 0 ? <span className="text-center text-[10px] text-amber-200">{unassignedCount} awaiting period markers</span> : null}</div>
+      <div className="grid gap-1"><Badge className="h-10 justify-center px-4"><Filter size={14} className="mr-2" />{hasMatchSelection ? `${filtered.length} occurrences` : "Select a match"}</Badge>{unassignedCount > 0 ? <span className="text-center text-[10px] text-amber-200">{unassignedCount} awaiting period markers</span> : null}</div>
     </Panel>
     <div className="maps-surfaces grid grid-cols-[minmax(0,1.35fr)_minmax(0,.65fr)] items-start gap-2 sm:gap-5">
-      <Panel className="min-w-0 p-2 sm:p-4"><div className="flex items-center justify-between gap-2"><div className="min-w-0"><Label>Pitch</Label><p className="mt-1 truncate text-[10px] text-slate-500 sm:text-xs">Points remain in their original match coordinates.</p></div><MapPinned className="shrink-0 text-leaf-400" /></div><PitchSurface className="mt-3 sm:mt-4" points={fieldPoints} onPointSelect={(id) => void selectPoint(id)} /></Panel>
+      <Panel className="min-w-0 p-2 sm:p-4"><div className="flex items-center justify-between gap-2"><div className="min-w-0"><Label>Pitch</Label><p className="mt-1 truncate text-[10px] text-slate-500 sm:text-xs">{hasMatchSelection ? "Points remain in their original match coordinates." : "Select a match above to display its locations."}</p></div><MapPinned className="shrink-0 text-leaf-400" /></div><PitchSurface className="mt-3 sm:mt-4" points={fieldPoints} onPointSelect={(id) => void selectPoint(id)} /></Panel>
       <div className="min-w-0 space-y-2 sm:space-y-5">
-        <Panel className="p-2 sm:p-4"><div className="flex items-center justify-between gap-2"><div className="min-w-0"><Label>Goal</Label><p className="mt-1 truncate text-[10px] text-slate-500 sm:text-xs">Shot and action destinations.</p></div><Target className="shrink-0 text-fire-400" /></div><GoalSurface className="mt-3 sm:mt-4" points={goalPoints} onPointSelect={(id) => void selectPoint(id)} /></Panel>
+        <Panel className="p-2 sm:p-4"><div className="flex items-center justify-between gap-2"><div className="min-w-0"><Label>Goal</Label><p className="mt-1 truncate text-[10px] text-slate-500 sm:text-xs">{hasMatchSelection ? "Shot and action destinations." : "Select a match above to display its goal locations."}</p></div><Target className="shrink-0 text-fire-400" /></div><GoalSurface className="mt-3 sm:mt-4" points={goalPoints} onPointSelect={(id) => void selectPoint(id)} /></Panel>
         <Panel className="overflow-hidden">
           <div className="border-b border-white/10 p-2 sm:p-3"><Label>Selected moment video</Label>{selectedPoint ? <p className="mt-1 truncate text-[10px] text-slate-500 sm:text-xs">{selectedPoint.matchTitle} · {selectedPoint.momentTypeName} / {selectedPoint.subMomentTypeName} · {formatTime(selectedClipStart)}–{formatTime(selectedClipEnd)}</p> : null}</div>
           <div className="relative aspect-video bg-black">{sourceUrl && selectedPoint ? <video
