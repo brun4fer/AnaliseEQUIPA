@@ -223,6 +223,19 @@ export function AnalysisWorkspace({ matchId }: { matchId: string }) {
       if (event.repeat || event.ctrlKey || event.metaKey || event.altKey) return;
       const target = event.target as HTMLElement | null;
       if (target?.isContentEditable || target?.matches("input, textarea, select")) return;
+      if (editingMoment || editingMatch || showCloudLibrary) return;
+      if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+        const video = videoRef.current;
+        if (!video) return;
+        event.preventDefault();
+        const delta = event.key === "ArrowLeft" ? -5 : 5;
+        const limit = duration || video.duration || 0;
+        const next = Math.max(0, Math.min(limit, video.currentTime + delta));
+        setPreviewEnd(null);
+        video.currentTime = next;
+        setCurrentTime(next);
+        return;
+      }
       if (event.code === "Space") {
         event.preventDefault();
         const video = videoRef.current;
@@ -238,7 +251,7 @@ export function AnalysisWorkspace({ matchId }: { matchId: string }) {
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [settings?.momentTypes, toggleMoment]);
+  }, [duration, editingMatch, editingMoment, settings?.momentTypes, showCloudLibrary, toggleMoment]);
 
   function seekTo(seconds: number) {
     const video = videoRef.current;
@@ -466,9 +479,9 @@ export function AnalysisWorkspace({ matchId }: { matchId: string }) {
           <div className="mt-1.5 flex items-center gap-2">
             <div className="min-w-0 flex-1 overflow-x-auto"><div className="flex min-w-max items-center gap-1">
               <Button size="icon" className="h-8 w-8" variant="secondary" disabled={!sourceUrl} title="Back 15 seconds" onClick={() => seekBy(-15)}><ChevronsLeft size={15} /></Button>
-              <Button size="icon" className="h-8 w-8" variant="secondary" disabled={!sourceUrl} title="Back 5 seconds" onClick={() => seekBy(-5)}><RotateCcw size={15} /></Button>
+              <Button size="icon" className="h-8 w-8" variant="secondary" disabled={!sourceUrl} title="Back 5 seconds (left arrow)" aria-label="Back 5 seconds with the left arrow" onClick={() => seekBy(-5)}><RotateCcw size={15} /></Button>
               <Button size="icon" className="h-8 w-8" variant="primary" disabled={!sourceUrl || saving} onClick={togglePlayback}>{playing ? <Pause size={15} /> : <Play size={15} />}</Button>
-              <Button size="icon" className="h-8 w-8" variant="secondary" disabled={!sourceUrl} title="Forward 5 seconds" onClick={() => seekBy(5)}><ChevronsRight size={15} /></Button>
+              <Button size="icon" className="h-8 w-8" variant="secondary" disabled={!sourceUrl} title="Forward 5 seconds (right arrow)" aria-label="Forward 5 seconds with the right arrow" onClick={() => seekBy(5)}><ChevronsRight size={15} /></Button>
               <Button size="icon" className="h-8 w-8" variant="secondary" disabled={!sourceUrl} title="Forward 15 seconds" onClick={() => seekBy(15)}><ChevronsRight size={15} className="scale-125" /></Button>
               <div className="flex overflow-hidden rounded-md border border-white/10">{[1, 2, 4].map((rate) => <button key={rate} type="button" onClick={() => setRate(rate)} className={`h-8 px-2 text-[10px] font-semibold transition ${playbackRate === rate ? "bg-cyan-300 text-slate-950" : "bg-white/[.04] text-slate-300 hover:bg-white/[.1]"}`}>{rate}×</button>)}</div>
               <Button size="icon" variant="danger" className="h-8 w-8" disabled={!lastMoment} title={lastMoment ? `Delete last recorded moment: ${lastMoment.momentType.name} at ${formatTime(lastMoment.startTimeSeconds)}` : "No recorded moment to delete"} aria-label="Delete last recorded moment" onClick={() => void removeLastMoment(lastMoment)}><Trash2 size={14} /></Button>
