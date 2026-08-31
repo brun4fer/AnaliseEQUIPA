@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { FileVideo, Filter, Loader2, MapPinned, Target, Upload } from "lucide-react";
+import { FileVideo, Filter, Loader2, MapPinned, Play, Target, Upload } from "lucide-react";
 
 import { GoalSurface, PitchSurface } from "@/components/analysis-surfaces";
 import { Badge, Button, Label, Panel, Select } from "@/components/ui";
@@ -19,6 +19,7 @@ export function MapsDashboard() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const objectUrlRef = useRef<string | null>(null);
   const videoRequestRef = useRef(0);
+  const autoPlayRef = useRef(false);
   const playlistActiveRef = useRef(false);
   const advancingRef = useRef(false);
   const remoteUrlsRef = useRef(new Map<string, string>());
@@ -101,7 +102,8 @@ export function MapsDashboard() {
   async function selectPoint(id: string, fromPlaylist = false) {
     const point = points.find((item) => item.id === id);
     if (!point) return;
-    playlistActiveRef.current = true;
+    autoPlayRef.current = true;
+    playlistActiveRef.current = fromPlaylist;
     if (!fromPlaylist) advancingRef.current = false;
     setSelectedPointId(id);
     setVideoNotice(null);
@@ -141,7 +143,7 @@ export function MapsDashboard() {
 
   async function loadSelectedVideo(file?: File) {
     if (!file || !selectedPoint) return;
-    playlistActiveRef.current = true;
+    autoPlayRef.current = true;
     advancingRef.current = false;
     replaceVideoSource(file);
     setVideoNotice(null);
@@ -149,10 +151,42 @@ export function MapsDashboard() {
   }
 
   function changeMomentType(nextId: string) {
+    autoPlayRef.current = false;
+    playlistActiveRef.current = false;
+    videoRef.current?.pause();
     setMomentTypeId(nextId);
     if (!nextId) return;
     const allowedIds = new Set(settings?.momentTypes.find((type) => type.id === nextId)?.allowedSubmoments?.map((type) => type.id) || []);
     if (submomentTypeId && !allowedIds.has(submomentTypeId)) setSubmomentTypeId("");
+  }
+
+  function pointsForSubmoment(typeId: string) {
+    if (!hasMatchSelection) return [];
+    return points.filter((point) =>
+      (matchId === "all" || point.matchId === matchId)
+      && (!momentTypeId || point.momentTypeId === momentTypeId)
+      && point.subMomentTypeId === typeId
+      && (period === "both" ? point.period !== null : point.period === period)
+    );
+  }
+
+  function playAll(nextPoints = filtered) {
+    if (!nextPoints.length) return;
+    playlistActiveRef.current = true;
+    autoPlayRef.current = true;
+    advancingRef.current = false;
+    void selectPoint(nextPoints[0].id, true);
+  }
+
+  function selectActionAndPlay(typeId: string) {
+    const nextPoints = pointsForSubmoment(typeId);
+    setSubmomentTypeId(typeId);
+    if (nextPoints.length) playAll(nextPoints);
+    else {
+      autoPlayRef.current = false;
+      playlistActiveRef.current = false;
+      videoRef.current?.pause();
+    }
   }
 
   function finishSelectedClip(video: HTMLVideoElement) {
@@ -176,12 +210,13 @@ export function MapsDashboard() {
     <input ref={fileInputRef} type="file" accept="video/*" className="hidden" onChange={(event) => { void loadSelectedVideo(event.target.files?.[0]); event.currentTarget.value = ""; }} />
     <div><p className="text-xs font-bold uppercase tracking-[.22em] text-leaf-400">Spatial analysis</p><h1 className="mt-2 text-3xl font-bold text-white">Occurrence maps</h1><p className="mt-2 text-sm text-slate-400">Original coordinates: first-half attacks run left to right and second-half attacks run right to left.</p></div>
     {error ? <Panel className="border-red-400/20 p-4 text-red-100">{error}</Panel> : null}
-    <Panel className="grid grid-cols-2 gap-4 p-4 xl:grid-cols-[1fr_1fr_1fr_.8fr_auto] xl:items-end">
-      <label className="grid gap-2"><Label>Match</Label><Select value={matchId} onChange={(event) => setMatchId(event.target.value)}><option value="unselected" disabled>Select a match</option><option value="all">All matches</option>{matches.map((match) => <option key={match.id} value={match.id}>{match.title}</option>)}</Select></label>
+    <Panel className="grid grid-cols-2 gap-4 p-4 xl:grid-cols-[1fr_1fr_1fr_.8fr_auto_auto] xl:items-end">
+      <label className="grid gap-2"><Label>Match</Label><Select value={matchId} onChange={(event) => { autoPlayRef.current = false; playlistActiveRef.current = false; videoRef.current?.pause(); setMatchId(event.target.value); }}><option value="unselected" disabled>Select a match</option><option value="all">All matches</option>{matches.map((match) => <option key={match.id} value={match.id}>{match.title}</option>)}</Select></label>
       <label className="grid gap-2"><Label>Moment</Label><Select value={momentTypeId} onChange={(event) => changeMomentType(event.target.value)}><option value="">All moments</option>{settings?.momentTypes.map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}</Select></label>
-      <label className="grid gap-2"><Label>Submoment</Label><Select value={submomentTypeId} onChange={(event) => setSubmomentTypeId(event.target.value)}><option value="">All submoments</option>{availableSubmomentTypes.map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}</Select></label>
-      <label className="grid gap-2"><Label>Match period</Label><Select value={period} onChange={(event) => setPeriod(event.target.value as MapPeriod)}><option value="both">Both halves</option><option value="first_half">1st half</option><option value="second_half">2nd half</option></Select></label>
+      <label className="grid gap-2"><Label>Submoment</Label><Select value={submomentTypeId} onChange={(event) => { autoPlayRef.current = false; playlistActiveRef.current = false; videoRef.current?.pause(); setSubmomentTypeId(event.target.value); }}><option value="">All submoments</option>{availableSubmomentTypes.map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}</Select></label>
+      <label className="grid gap-2"><Label>Match period</Label><Select value={period} onChange={(event) => { autoPlayRef.current = false; playlistActiveRef.current = false; videoRef.current?.pause(); setPeriod(event.target.value as MapPeriod); }}><option value="both">Both halves</option><option value="first_half">1st half</option><option value="second_half">2nd half</option></Select></label>
       <div className="grid gap-1"><Badge className="h-10 justify-center px-4"><Filter size={14} className="mr-2" />{hasMatchSelection ? `${filtered.length} occurrences` : "Select a match"}</Badge>{unassignedCount > 0 ? <span className="text-center text-[10px] text-amber-200">{unassignedCount} awaiting period markers</span> : null}</div>
+      <Button className="h-10" variant="primary" disabled={!filtered.length || videoLoading} onClick={() => playAll()}><Play size={15} />Play all</Button>
     </Panel>
     <div className="maps-surfaces grid grid-cols-[minmax(0,1.35fr)_minmax(0,.65fr)] items-start gap-2 sm:gap-5">
       <Panel className="min-w-0 p-2 sm:p-4"><div className="flex items-center justify-between gap-2"><div className="min-w-0"><Label>Pitch</Label><p className="mt-1 truncate text-[10px] text-slate-500 sm:text-xs">{hasMatchSelection ? "Points remain in their original match coordinates." : "Select a match above to display its locations."}</p></div><MapPinned className="shrink-0 text-leaf-400" /></div><PitchSurface className="mt-3 sm:mt-4" points={fieldPoints} onPointSelect={(id) => void selectPoint(id)} /></Panel>
@@ -200,16 +235,19 @@ export function MapsDashboard() {
             onLoadedMetadata={(event) => {
               const end = Math.min(event.currentTarget.duration, selectedClipEnd);
               event.currentTarget.currentTime = Math.min(selectedClipStart, end);
-              if (playlistActiveRef.current) void event.currentTarget.play();
+              if (autoPlayRef.current) void event.currentTarget.play();
             }}
             onPlay={(event) => {
-              playlistActiveRef.current = true;
+              autoPlayRef.current = true;
               const end = Math.min(event.currentTarget.duration, selectedClipEnd);
               if (event.currentTarget.currentTime < selectedClipStart || event.currentTarget.currentTime >= end) event.currentTarget.currentTime = Math.min(selectedClipStart, end);
             }}
             onPause={(event) => {
               const end = Math.min(event.currentTarget.duration, selectedClipEnd);
-              if (!advancingRef.current && event.currentTarget.currentTime < end - .04) playlistActiveRef.current = false;
+              if (!advancingRef.current && event.currentTarget.currentTime < end - .04) {
+                autoPlayRef.current = false;
+                playlistActiveRef.current = false;
+              }
             }}
             onSeeking={(event) => {
               const end = Math.min(event.currentTarget.duration, selectedClipEnd);
@@ -221,6 +259,6 @@ export function MapsDashboard() {
         </Panel>
       </div>
     </div>
-    <Panel className="p-4"><Label>Legend</Label><div className="mt-3 flex flex-wrap gap-2">{availableSubmomentTypes.map((type) => { const count = filtered.filter((point) => point.subMomentTypeId === type.id).length; return <span key={type.id} className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/[.04] px-3 py-2 text-xs text-slate-300"><span className="h-3 w-3 rounded-full" style={{ backgroundColor: type.color }} />{type.name}<strong className="text-white">{count}</strong></span>; })}</div></Panel>
+    <Panel className="p-4"><div className="flex items-center justify-between gap-3"><div><Label>Actions</Label><p className="mt-1 text-[10px] text-slate-500">Select an action to play all of its occurrences.</p></div>{submomentTypeId ? <Button size="sm" onClick={() => { autoPlayRef.current = false; playlistActiveRef.current = false; videoRef.current?.pause(); setSubmomentTypeId(""); }}>Show all</Button> : null}</div><div className="mt-3 flex flex-wrap gap-2">{availableSubmomentTypes.map((type) => { const count = pointsForSubmoment(type.id).length; const active = submomentTypeId === type.id; return <button type="button" key={type.id} disabled={!count} onClick={() => selectActionAndPlay(type.id)} className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition disabled:cursor-not-allowed disabled:opacity-40 ${active ? "bg-white/[.12] text-white ring-1 ring-white/20" : "border-white/10 bg-white/[.04] text-slate-300 hover:bg-white/[.09]"}`} style={active ? { borderColor: type.color } : undefined}><span className="h-3 w-3 rounded-full" style={{ backgroundColor: type.color }} />{type.name}<strong className="text-white">{count}</strong><Play size={11} className="text-slate-500" /></button>; })}</div></Panel>
   </div>;
 }
