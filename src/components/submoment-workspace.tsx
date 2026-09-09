@@ -2,11 +2,12 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, ChevronLeft, ChevronRight, Cloud, Crosshair, FileVideo, Goal, Loader2, MapPin, Pause, Pencil, Play, Save, Trash2, Upload, X } from "lucide-react";
+import { ArrowLeft, ChevronLeft, ChevronRight, ChevronsRight, Cloud, Crosshair, FileVideo, Goal, Loader2, MapPin, Pause, Pencil, Play, RotateCcw, Save, Trash2, Upload, X } from "lucide-react";
 
 import { Coordinate, GoalSurface, PitchSurface } from "@/components/analysis-surfaces";
 import { CloudVideoLibrary } from "@/components/cloud-video-library";
 import { Badge, Button, Label, Panel, Select, TextArea } from "@/components/ui";
+import { useVideoKeyboardSeek, VideoFullscreenButton } from "@/components/video-controls";
 import type { MatchDetail, MomentRecord, SettingsPayload, SubMomentRecord } from "@/lib/domain";
 import { apiFetch } from "@/lib/http";
 import { getRememberedMatchVideo, rememberMatchVideo } from "@/lib/local-video-store";
@@ -17,6 +18,7 @@ import { formatBytes, formatTime, roundTime } from "@/lib/time";
 export function SubmomentWorkspace({ matchId }: { matchId: string }) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const workspaceRef = useRef<HTMLDivElement | null>(null);
   const uploadAbortRef = useRef<AbortController | null>(null);
   const playlistActiveRef = useRef(false);
   const advancingRef = useRef(false);
@@ -56,7 +58,7 @@ export function SubmomentWorkspace({ matchId }: { matchId: string }) {
         setSettings(settingsData);
         setSelectedMomentId(matchData.moments[0]?.id || null);
         if (matchData.video?.storageStatus === "READY") {
-          const remote = await getRemoteVideoUrl(matchId).catch(() => null);
+          const remote = await getRemoteVideoUrl(matchId, "analysis").catch(() => null);
           if (active && remote) {
             setSourceUrl(remote.url);
             return;
@@ -142,7 +144,7 @@ export function SubmomentWorkspace({ matchId }: { matchId: string }) {
         setNotice(`${detail} ${Math.round(progress * 100)}%`);
       }, controller.signal);
       const [remote, savedMatch] = await Promise.all([
-        getRemoteVideoUrl(matchId),
+        getRemoteVideoUrl(matchId, "analysis"),
         apiFetch<MatchDetail>(`/api/matches/${matchId}`),
       ]);
       setSourceUrl(remote.url);
@@ -176,7 +178,7 @@ export function SubmomentWorkspace({ matchId }: { matchId: string }) {
     try {
       await attachCloudVideo(matchId, asset.id);
       const [remote, savedMatch] = await Promise.all([
-        getRemoteVideoUrl(matchId),
+        getRemoteVideoUrl(matchId, "analysis"),
         apiFetch<MatchDetail>(`/api/matches/${matchId}`),
       ]);
       setSourceUrl(remote.url);
@@ -242,6 +244,16 @@ export function SubmomentWorkspace({ matchId }: { matchId: string }) {
     setPlaybackRate(rate);
     if (videoRef.current) videoRef.current.playbackRate = rate;
   }
+
+  function seekTo(seconds: number) {
+    const video = videoRef.current;
+    if (!video || !selectedMoment) return;
+    const next = Math.max(selectedMoment.startTimeSeconds, Math.min(selectedMoment.endTimeSeconds, seconds));
+    video.currentTime = next;
+    setCurrentTime(next);
+  }
+
+  useVideoKeyboardSeek(videoRef, seekTo, Boolean(sourceUrl && selectedMoment));
 
   function handleTimeUpdate() {
     const video = videoRef.current;
@@ -352,7 +364,8 @@ export function SubmomentWorkspace({ matchId }: { matchId: string }) {
 
     <Panel className="flex shrink-0 flex-wrap items-center gap-2 px-2 py-1.5"><Link href={`/analysis/${matchId}`} className="inline-flex h-8 items-center gap-1.5 rounded-md border border-white/10 bg-white/[.04] px-2.5 text-[10px] font-semibold text-slate-300 transition hover:bg-white/[.08] hover:text-white"><ArrowLeft size={12} />Moment tagging</Link><span className="hidden min-w-0 max-w-48 truncate text-[10px] font-semibold text-white lg:block">{match.title}</span><label className="flex min-w-0 flex-1 items-center gap-2"><span className="shrink-0 text-[9px] font-semibold uppercase tracking-[.16em] text-slate-500">Moment</span><Select className="h-8 min-w-0 flex-1 py-0 text-xs" value={filterTypeId} onChange={(event) => changeFilter(event.target.value)}><option value="">All moments ({match.moments.length})</option>{settings.momentTypes.map((type) => <option key={type.id} value={type.id}>{type.name} ({match.moments.filter((moment) => moment.momentTypeId === type.id).length})</option>)}</Select></label><Badge className="shrink-0">{selectedIndex >= 0 ? `${selectedIndex + 1} / ${moments.length}` : `0 / ${moments.length}`}</Badge><Button size="sm" variant="primary" className="h-8 shrink-0" disabled={!sourceUrl || moments.length === 0} onClick={playAllMoments}><Play size={13} />Play all</Button>{uploading ? <Button size="sm" variant="danger" className="h-8 shrink-0" onClick={() => uploadAbortRef.current?.abort()}><X size={13} />Cancel {Math.round(uploadProgress * 100)}%</Button> : <><Button size="sm" className="h-8 shrink-0" onClick={() => fileInputRef.current?.click()}><Upload size={13} />Upload new</Button><Button size="sm" className="h-8 shrink-0" onClick={() => void openCloudLibrary()}><Cloud size={13} />Cloud library</Button></>}</Panel>
 
-    <div className="submoment-layout grid min-h-0 flex-1 items-stretch gap-2 min-[900px]:grid-cols-[12rem_minmax(0,1fr)_20rem] min-[1400px]:grid-cols-[15rem_minmax(0,1fr)_22rem]">
+    <div ref={workspaceRef} data-video-workspace className="submoment-layout relative grid min-h-0 flex-1 items-stretch gap-2 min-[900px]:grid-cols-[12rem_minmax(0,1fr)_20rem] min-[1400px]:grid-cols-[15rem_minmax(0,1fr)_22rem]">
+      {selectedMoment && sourceUrl ? <div className="absolute bottom-2 left-2 right-2 z-20 rounded-lg border border-white/10 bg-pitch-950/95 p-2 shadow-xl min-[900px]:left-[12.5rem] min-[900px]:right-[20.5rem] min-[1400px]:left-[15.5rem] min-[1400px]:right-[22.5rem]"><input aria-label="Moment position" type="range" min={selectedMoment.startTimeSeconds} max={selectedMoment.endTimeSeconds} step={.1} value={Math.max(selectedMoment.startTimeSeconds, Math.min(currentTime, selectedMoment.endTimeSeconds))} onChange={(event) => seekTo(Number(event.target.value))} className="h-1.5 w-full cursor-pointer accent-cyan-300"/><div className="mt-1 flex items-center justify-end gap-1"><span className="mr-auto font-mono text-[10px] text-slate-300">{formatTime(currentTime)} / {formatTime(selectedMoment.endTimeSeconds)}</span><Button size="icon" className="h-7 w-7" title="Back 5 seconds (left arrow)" onClick={() => seekTo(currentTime - 5)}><RotateCcw size={13}/></Button><Button size="icon" className="h-7 w-7" title="Forward 5 seconds (right arrow)" onClick={() => seekTo(currentTime + 5)}><ChevronsRight size={13}/></Button><VideoFullscreenButton targetRef={workspaceRef}/></div></div> : null}
       <Panel className="flex min-h-0 w-full flex-col overflow-hidden"><div className="shrink-0 border-b border-white/10 px-2.5 py-2"><Label>Tagged moments</Label><span className="ml-2 text-[9px] text-slate-600">{moments.length}</span></div><div className="min-h-0 flex-1 overflow-y-auto">{moments.length === 0 ? <p className="p-4 text-xs text-slate-500">There are no moments in this filter.</p> : moments.map((moment, index) => <button key={moment.id} onClick={() => selectMoment(moment)} className={`flex w-full items-center gap-1.5 border-b border-white/[.06] px-2 py-1.5 text-left transition hover:bg-white/[.06] ${selectedMoment?.id === moment.id ? "bg-leaf-400/10" : ""}`}><span className="w-4 shrink-0 text-right font-mono text-[8px] text-slate-600">{index + 1}</span><span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: moment.momentType.color }} /><span className="min-w-0 flex-1"><span className="block truncate text-[10px] font-semibold text-white">{moment.momentType.name}</span><span className="block font-mono text-[8px] text-slate-500">{formatTime(moment.startTimeSeconds)}–{formatTime(moment.endTimeSeconds)}</span></span><Badge className="px-1 py-0 text-[8px]">{moment.subMoments.length}</Badge></button>)}</div></Panel>
 
       <div className="flex min-h-0 min-w-0 flex-col">

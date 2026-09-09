@@ -10,15 +10,16 @@ import { Button, Label, Panel } from "@/components/ui";
 import { cn } from "@/lib/cn";
 import type { AccountPayload } from "@/lib/domain";
 import { apiFetch } from "@/lib/http";
+import { accessAreaForPath, type AccessArea } from "@/lib/access-areas";
 
 const links = [
-  { href: "/", label: "Matches", icon: Home, protected: true },
-  { href: "/matches/new", label: "New match", icon: Plus, protected: true },
-  { href: "/maps", label: "Maps", icon: Map, protected: false },
-  { href: "/reports", label: "Reports", icon: BarChart3, protected: false },
-  { href: "/maintenance", label: "Maintenance", icon: Wrench, protected: true },
-  { href: "/settings", label: "Settings", icon: Settings, protected: true },
-  { href: "/help", label: "Help", icon: CircleHelp, protected: false },
+  { href: "/", label: "Matches", icon: Home, area: "matches" as const },
+  { href: "/matches/new", label: "New match", icon: Plus, area: "newMatch" as const },
+  { href: "/maps", label: "Maps", icon: Map, area: "maps" as const },
+  { href: "/reports", label: "Reports", icon: BarChart3, area: "reports" as const },
+  { href: "/maintenance", label: "Maintenance", icon: Wrench, area: "maintenance" as const },
+  { href: "/settings", label: "Settings", icon: Settings, area: "settings" as const },
+  { href: "/help", label: "Help", icon: CircleHelp, area: "help" as const },
 ];
 
 const PUBLIC_PATHS = ["/login", "/register", "/change-password", "/onboarding"];
@@ -33,9 +34,7 @@ function getPresenceClientId() {
   return created;
 }
 
-function isManagementPath(pathname: string) {
-  return pathname === "/" || pathname.startsWith("/matches") || pathname.startsWith("/maintenance") || pathname.startsWith("/settings") || pathname.startsWith("/analysis");
-}
+function isUnlocked(account: AccountPayload, area: AccessArea | null) { return !area || account.accessControl.globalUnlocked || account.accessControl.unlockedAreas.includes(area); }
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -43,18 +42,20 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [account, setAccount] = useState<AccountPayload | null>(null);
   const [showManagementAccess, setShowManagementAccess] = useState(false);
   const [pendingHref, setPendingHref] = useState<string | null>(null);
+  const [pendingArea, setPendingArea] = useState<AccessArea | null>(null);
   const [presence, setPresence] = useState<Presence | null>(null);
   const [presenceAcknowledged, setPresenceAcknowledged] = useState(false);
   const isPublic = PUBLIC_PATHS.includes(pathname);
+  const currentArea = accessAreaForPath(pathname);
 
   useEffect(() => {
     if (!isPublic) {
       apiFetch<AccountPayload>("/api/account").then((next) => {
         setAccount(next);
-        if (!next.managementAccess.configured || (isManagementPath(pathname) && !next.managementAccess.unlocked)) setShowManagementAccess(true);
+        if (!isUnlocked(next, currentArea)) { setPendingArea(currentArea); setShowManagementAccess(true); }
       }).catch(() => undefined);
     }
-  }, [isPublic, pathname]);
+  }, [currentArea, isPublic, pathname]);
 
   useEffect(() => {
     if (isPublic) return;
@@ -118,16 +119,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
           <div className="flex min-w-0 items-center gap-2">
             <nav className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto rounded-lg border border-white/10 bg-white/[.03] p-1 sm:flex-none">
-              {links.map(({ href, label, icon: Icon, protected: needsManagement }) => {
+              {links.map(({ href, label, icon: Icon, area }) => {
                 const active = href === "/" ? pathname === "/" : pathname.startsWith(href);
                 return (
                   <Link
                     key={href}
                     href={href}
                     onClick={(event) => {
-                      if (needsManagement && account && !account.managementAccess.unlocked) {
+                      if (account && !isUnlocked(account, area)) {
                         event.preventDefault();
                         setPendingHref(href);
+                        setPendingArea(area);
                         setShowManagementAccess(true);
                       }
                     }}
@@ -138,7 +140,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   >
                     <Icon size={16} />
                     <span className="hidden sm:inline">{label}</span>
-                    {needsManagement && account && !account.managementAccess.unlocked ? <LockKeyhole size={10} className="text-amber-300" aria-label="Locked" /> : null}
+                    {account && !isUnlocked(account, area) ? <LockKeyhole size={10} className="text-amber-300" aria-label="Locked" /> : null}
                   </Link>
                 );
               })}
@@ -168,13 +170,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
         </Panel>
       </div> : null}
-      {showManagementAccess && account ? <ManagementAccessDialog configured={account.managementAccess.configured} canDismiss={!isManagementPath(pathname)} onDismiss={() => { setShowManagementAccess(false); setPendingHref(null); }} onUnlocked={() => {
-        setAccount({ ...account, managementAccess: { configured: true, unlocked: true } });
+      {showManagementAccess && account && pendingArea ? <ManagementAccessDialog area={pendingArea} canDismiss={isUnlocked(account, currentArea)} onDismiss={() => { setShowManagementAccess(false); setPendingHref(null); setPendingArea(null); }} onUnlocked={(accessControl) => {
+        setAccount({ ...account, accessControl });
         setShowManagementAccess(false);
         const target = pendingHref;
         setPendingHref(null);
+        setPendingArea(null);
         if (target && target !== pathname) window.location.href = target;
-        else if (isManagementPath(pathname)) window.location.reload();
+        else if (currentArea) window.location.reload();
       }} /> : null}
     </div>
   );

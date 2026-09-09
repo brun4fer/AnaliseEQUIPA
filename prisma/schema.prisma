@@ -37,6 +37,24 @@ model Workspace {
   name                      String
   managementPasswordHash    String?
   managementPasswordVersion Int      @default(0)
+  globalAccessPasswordHash       String?
+  globalAccessPasswordVersion    Int @default(0)
+  matchesAccessPasswordHash      String?
+  matchesAccessPasswordVersion   Int @default(0)
+  newMatchAccessPasswordHash     String?
+  newMatchAccessPasswordVersion  Int @default(0)
+  mapsAccessPasswordHash         String?
+  mapsAccessPasswordVersion      Int @default(0)
+  reportsAccessPasswordHash      String?
+  reportsAccessPasswordVersion   Int @default(0)
+  maintenanceAccessPasswordHash  String?
+  maintenanceAccessPasswordVersion Int @default(0)
+  settingsAccessPasswordHash     String?
+  settingsAccessPasswordVersion  Int @default(0)
+  helpAccessPasswordHash         String?
+  helpAccessPasswordVersion      Int @default(0)
+  analysisAccessPasswordHash     String?
+  analysisAccessPasswordVersion  Int @default(0)
   createdAt                 DateTime @default(now())
   updatedAt                 DateTime @updatedAt
 

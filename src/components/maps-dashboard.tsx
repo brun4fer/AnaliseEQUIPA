@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { FileVideo, Filter, Loader2, MapPinned, Play, Target, Upload } from "lucide-react";
+import { ChevronsRight, FileVideo, Filter, Loader2, MapPinned, Play, RotateCcw, Target, Upload } from "lucide-react";
 
 import { GoalSurface, PitchSurface } from "@/components/analysis-surfaces";
 import { Badge, Button, Label, Panel, Select } from "@/components/ui";
+import { useVideoKeyboardSeek, VideoFullscreenButton } from "@/components/video-controls";
 import type { MapPoint, MatchSummary, SettingsPayload } from "@/lib/domain";
 import { apiFetch } from "@/lib/http";
 import { getRememberedMatchVideo, rememberMatchVideo } from "@/lib/local-video-store";
@@ -17,6 +18,7 @@ type MapPeriod = "both" | "first_half" | "second_half";
 export function MapsDashboard() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const workspaceRef = useRef<HTMLDivElement | null>(null);
   const objectUrlRef = useRef<string | null>(null);
   const videoRequestRef = useRef(0);
   const autoPlayRef = useRef(false);
@@ -36,6 +38,8 @@ export function MapsDashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [videoNotice, setVideoNotice] = useState<string | null>(null);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [videoDuration, setVideoDuration] = useState(0);
 
   useEffect(() => {
     Promise.all([apiFetch<MapPoint[]>("/api/maps"), apiFetch<MatchSummary[]>("/api/matches"), apiFetch<SettingsPayload>("/api/settings")])
@@ -116,7 +120,7 @@ export function MapsDashboard() {
       const match = matches.find((item) => item.id === point.matchId);
       if (match?.video?.storageStatus === "READY") {
         const cachedUrl = remoteUrlsRef.current.get(point.matchId);
-        const remote = cachedUrl ? { url: cachedUrl } : await getRemoteVideoUrl(point.matchId).catch(() => null);
+        const remote = cachedUrl ? { url: cachedUrl } : await getRemoteVideoUrl(point.matchId, "maps").catch(() => null);
         if (request !== videoRequestRef.current) return;
         if (remote) {
           remoteUrlsRef.current.set(point.matchId, remote.url);
@@ -205,6 +209,17 @@ export function MapsDashboard() {
     }
   }
 
+  function seekTo(seconds: number) {
+    const video = videoRef.current;
+    if (!video || !selectedPoint) return;
+    const end = Math.min(video.duration || selectedClipEnd, selectedClipEnd);
+    const next = Math.max(selectedClipStart, Math.min(end, seconds));
+    video.currentTime = next;
+    setCurrentTime(next);
+  }
+
+  useVideoKeyboardSeek(videoRef, seekTo, Boolean(selectedPoint && sourceUrl));
+
   if (loading) return <div className="flex min-h-[60vh] items-center justify-center text-slate-400"><Loader2 className="mr-2 animate-spin" />Building maps…</div>;
   return <div className="space-y-5">
     <input ref={fileInputRef} type="file" accept="video/*" className="hidden" onChange={(event) => { void loadSelectedVideo(event.target.files?.[0]); event.currentTarget.value = ""; }} />
@@ -218,7 +233,7 @@ export function MapsDashboard() {
       <div className="grid gap-1"><Badge className="h-10 justify-center px-4"><Filter size={14} className="mr-2" />{hasMatchSelection ? `${filtered.length} occurrences` : "Select a match"}</Badge>{unassignedCount > 0 ? <span className="text-center text-[10px] text-amber-200">{unassignedCount} awaiting period markers</span> : null}</div>
       <Button className="h-10" variant="primary" disabled={!filtered.length || videoLoading} onClick={() => playAll()}><Play size={15} />Play all</Button>
     </Panel>
-    <div className="maps-surfaces grid grid-cols-[minmax(0,1.35fr)_minmax(0,.65fr)] items-start gap-2 sm:gap-5">
+    <div ref={workspaceRef} data-video-workspace className="maps-surfaces grid grid-cols-[minmax(0,1.35fr)_minmax(0,.65fr)] items-start gap-2 sm:gap-5">
       <Panel className="min-w-0 p-2 sm:p-4"><div className="flex items-center justify-between gap-2"><div className="min-w-0"><Label>Pitch</Label><p className="mt-1 truncate text-[10px] text-slate-500 sm:text-xs">{hasMatchSelection ? "Points remain in their original match coordinates." : "Select a match above to display its locations."}</p></div><MapPinned className="shrink-0 text-leaf-400" /></div><PitchSurface className="mt-3 sm:mt-4" points={fieldPoints} onPointSelect={(id) => void selectPoint(id)} /></Panel>
       <div className="min-w-0 space-y-2 sm:space-y-5">
         <Panel className="p-2 sm:p-4"><div className="flex items-center justify-between gap-2"><div className="min-w-0"><Label>Goal</Label><p className="mt-1 truncate text-[10px] text-slate-500 sm:text-xs">{hasMatchSelection ? "Shot and action destinations." : "Select a match above to display its goal locations."}</p></div><Target className="shrink-0 text-fire-400" /></div><GoalSurface className="mt-3 sm:mt-4" points={goalPoints} onPointSelect={(id) => void selectPoint(id)} /></Panel>
@@ -234,6 +249,8 @@ export function MapsDashboard() {
             className="h-full w-full object-contain"
             onLoadedMetadata={(event) => {
               const end = Math.min(event.currentTarget.duration, selectedClipEnd);
+              setVideoDuration(event.currentTarget.duration);
+              setCurrentTime(Math.min(selectedClipStart, end));
               event.currentTarget.currentTime = Math.min(selectedClipStart, end);
               if (autoPlayRef.current) void event.currentTarget.play();
             }}
@@ -254,8 +271,9 @@ export function MapsDashboard() {
               if (event.currentTarget.currentTime < selectedClipStart) event.currentTarget.currentTime = selectedClipStart;
               else if (event.currentTarget.currentTime > end) event.currentTarget.currentTime = end;
             }}
-            onTimeUpdate={(event) => finishSelectedClip(event.currentTarget)}
+            onTimeUpdate={(event) => { setCurrentTime(event.currentTarget.currentTime); finishSelectedClip(event.currentTarget); }}
           /> : <div className="flex h-full flex-col items-center justify-center p-2 text-center sm:p-5"><FileVideo className="text-leaf-400" size={28} />{videoLoading ? <p className="mt-2 text-xs text-slate-400">Loading video…</p> : selectedPoint ? <><p className="mt-2 text-[10px] text-slate-400 sm:text-xs">{videoNotice || "Upload this match video from the analysis page."}</p>{matches.find((item) => item.id === selectedPoint.matchId)?.video?.storageStatus !== "READY" ? <Button className="mt-2" size="sm" onClick={() => fileInputRef.current?.click()}><Upload size={13} />Use local file</Button> : null}</> : <p className="mt-2 text-[10px] text-slate-500 sm:text-xs">Select a point on the pitch or goal.</p>}</div>}</div>
+          {selectedPoint && sourceUrl ? <div className="border-t border-white/10 p-2"><input aria-label="Moment position" type="range" min={selectedClipStart} max={Math.min(videoDuration || selectedClipEnd, selectedClipEnd)} step={.1} value={Math.max(selectedClipStart, Math.min(currentTime, selectedClipEnd))} onChange={(event) => seekTo(Number(event.target.value))} className="h-1.5 w-full cursor-pointer accent-cyan-300"/><div className="mt-1 flex items-center justify-end gap-1"><span className="mr-auto font-mono text-[10px] text-slate-400">{formatTime(currentTime)} / {formatTime(selectedClipEnd)}</span><Button size="icon" className="h-7 w-7" title="Back 5 seconds (left arrow)" onClick={() => seekTo(currentTime - 5)}><RotateCcw size={13}/></Button><Button size="icon" className="h-7 w-7" title="Forward 5 seconds (right arrow)" onClick={() => seekTo(currentTime + 5)}><ChevronsRight size={13}/></Button><VideoFullscreenButton targetRef={workspaceRef}/></div></div> : null}
         </Panel>
       </div>
     </div>

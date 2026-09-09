@@ -102,7 +102,7 @@ export type AccountPayload = {
   username: string;
   teamName: string | null;
   needsOnboarding: boolean;
-  managementAccess: { configured: boolean; unlocked: boolean };
+  accessControl: { globalUnlocked: boolean; unlockedAreas: import("@/lib/access-areas").AccessArea[] };
 };
 
 export type MaintenanceRecord = {

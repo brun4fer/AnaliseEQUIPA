@@ -1,14 +1,15 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Archive, CheckSquare, FileVideo, Loader2, Pause, Pencil, Play, Square, Trash2, Upload, X } from "lucide-react";
+import { Archive, CheckSquare, ChevronsRight, Download, FileVideo, Loader2, Pause, Pencil, Play, RotateCcw, Square, Trash2, Upload, X } from "lucide-react";
 import { MomentEditDialog } from "@/components/moment-edit-dialog";
 import { Badge, Button, Label, Panel, Select } from "@/components/ui";
+import { useVideoKeyboardSeek, VideoFullscreenButton } from "@/components/video-controls";
 import type { AccountPayload, MatchDetail, MatchSummary, MomentRecord, SettingsPayload } from "@/lib/domain";
 import { isExportPickerCancellation, pickExportDirectory, writeBlobToDirectory } from "@/lib/export-directory";
 import { apiFetch } from "@/lib/http";
 import { getRememberedMatchVideo, rememberMatchVideo } from "@/lib/local-video-store";
-import { getRemoteVideoUrl } from "@/lib/remote-video-store";
+import { getRemoteVideoDownloadUrl, getRemoteVideoUrl } from "@/lib/remote-video-store";
 import { SmartVideoExportSession } from "@/lib/smart-video-export";
 import { formatTime } from "@/lib/time";
 import { downloadBlob, exportQualityOptions, type ExportQuality } from "@/lib/video-export";
@@ -17,6 +18,7 @@ type Clip = { match: MatchDetail; moment: MomentRecord };
 
 export function ReportsClient() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const workspaceRef = useRef<HTMLDivElement | null>(null);
   const objectUrl = useRef<string | null>(null);
   const files = useRef(new Map<string, File>());
   const autoPlayRef = useRef(false);
@@ -34,6 +36,8 @@ export function ReportsClient() {
   const [playing, setPlaying] = useState<{ clip: Clip; url: string } | null>(null);
   const [editingClip, setEditingClip] = useState<Clip | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [videoDuration, setVideoDuration] = useState(0);
   const [loading, setLoading] = useState(true);
   const [loadingDetails, setLoadingDetails] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -73,7 +77,7 @@ export function ReportsClient() {
       return { source: file as File | string, url, release: () => URL.revokeObjectURL(url) };
     }
     if (match.video?.storageStatus !== "READY") return null;
-    const remote = await getRemoteVideoUrl(match.id).catch(() => null);
+    const remote = await getRemoteVideoUrl(match.id, "reports").catch(() => null);
     return remote ? { source: remote.url as File | string, url: remote.url, release: () => undefined } : null;
   }
 
@@ -88,6 +92,26 @@ export function ReportsClient() {
     setNotice(unmatched.length ? `Could not match: ${unmatched.join(", ")}.` : "Local videos are ready.");
   }
 
+  async function downloadFullMatch(match: MatchDetail) {
+    try {
+      const local = await getVideo(match);
+      if (local) {
+        downloadBlob(local, local.name || match.video?.fileName || `${safeName(match.title)}.mp4`);
+        return;
+      }
+      if (match.video?.storageStatus !== "READY") throw new Error(`The full video for “${match.title}” is not available.`);
+      const remote = await getRemoteVideoDownloadUrl(match.id);
+      const link = document.createElement("a");
+      link.href = remote.url;
+      link.rel = "noopener";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "The full match video could not be downloaded.");
+    }
+  }
+
   async function playClip(clip: Clip, fromPlaylist = false) {
     autoPlayRef.current = true;
     playlistActiveRef.current = fromPlaylist;
@@ -100,7 +124,7 @@ export function ReportsClient() {
     const request = ++playRequestRef.current;
     if (clip.match.video?.storageStatus === "READY") {
       const cachedUrl = remoteUrlsRef.current.get(clip.match.id);
-      const remote = cachedUrl ? { url: cachedUrl } : await getRemoteVideoUrl(clip.match.id).catch(() => null);
+      const remote = cachedUrl ? { url: cachedUrl } : await getRemoteVideoUrl(clip.match.id, "reports").catch(() => null);
       if (request !== playRequestRef.current) return;
       if (remote) {
         remoteUrlsRef.current.set(clip.match.id, remote.url);
@@ -161,6 +185,18 @@ export function ReportsClient() {
     }
     void video.play();
   }
+
+  function seekTo(seconds: number) {
+    const video = videoRef.current;
+    if (!video || !playing) return;
+    const start = playing.clip.moment.startTimeSeconds;
+    const end = Math.min(video.duration || playing.clip.moment.endTimeSeconds, playing.clip.moment.endTimeSeconds);
+    const next = Math.max(start, Math.min(end, seconds));
+    video.currentTime = next;
+    setCurrentTime(next);
+  }
+
+  useVideoKeyboardSeek(videoRef, seekTo, Boolean(playing));
 
   async function updateReportMoment(clip: Clip, input: { momentTypeId: string; startTimeSeconds: number; endTimeSeconds: number; notes: string | null }) {
     const saved = await apiFetch<MomentRecord>(`/api/moments/${clip.moment.id}`, { method: "PATCH", body: JSON.stringify(input) });
@@ -242,9 +278,11 @@ export function ReportsClient() {
     <Panel className="grid gap-4 p-4 md:grid-cols-3"><label className="grid gap-2"><Label>Moment</Label><Select value={momentTypeId} onChange={(event) => { setMomentTypeId(event.target.value); setSubmomentTypeId(""); }}><option value="">All moments</option>{settings?.momentTypes.map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}</Select></label><label className="grid gap-2"><Label>Submoment</Label><Select value={submomentTypeId} onChange={(event) => setSubmomentTypeId(event.target.value)}><option value="">All submoments</option>{availableSubmomentTypes.map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}</Select></label><label className="grid gap-2"><Label>Export quality</Label><Select value={quality} onChange={(event) => setQuality(event.target.value as ExportQuality)}>{exportQualityOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</Select><span className="text-[10px] text-slate-500">{exportQualityOptions.find((item) => item.value === quality)?.detail}</span></label></Panel>
     <div className="grid gap-5 xl:grid-cols-[22rem_minmax(0,1fr)]"><Panel className="overflow-hidden"><div className="flex gap-2 border-b border-white/10 p-3"><Button size="sm" onClick={() => setSelectedIds(matches.map((item) => item.id))}><CheckSquare size={14} />Select all</Button><Button size="sm" onClick={() => setSelectedIds([])}>Clear</Button></div><div className="max-h-[42rem] overflow-y-auto">{matches.map((match) => <button key={match.id} onClick={() => toggleMatch(match.id)} className={`flex w-full items-start gap-3 border-b border-white/[.06] p-3 text-left hover:bg-white/[.06] ${selectedIds.includes(match.id) ? "bg-leaf-400/10" : ""}`}>{selectedIds.includes(match.id) ? <CheckSquare size={17} className="text-leaf-400" /> : <Square size={17} className="text-slate-600" />}<span className="min-w-0"><span className="block truncate text-sm font-semibold text-white">{match.title}</span><span className="text-xs text-slate-500">{match.momentCount} moments · {match.video?.fileName || "No video"}</span></span></button>)}</div></Panel>
       <div className="space-y-4"><Panel className="flex flex-wrap items-center justify-between gap-3 p-4"><div><p className="font-semibold text-white">{loadingDetails ? "Loading clips…" : `${clips.length} clips found`}</p><p className="text-xs text-slate-500">Cloud videos are used automatically. Local files remain available as a faster fallback.</p></div><div className="flex flex-wrap gap-2"><Button variant="primary" disabled={!clips.length || loadingDetails} onClick={playAll}><Play size={16} />Play all</Button><label className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-lg border border-white/10 bg-white/[.06] px-3 text-sm font-semibold text-slate-100 hover:bg-white/[.11]"><Upload size={15} />Load local fallback<input type="file" accept="video/*" multiple className="hidden" onChange={(event) => void addVideos(event.target.files)} /></label><Button disabled={!clips.length || exporting} onClick={() => void exportClips()}><Archive size={16} />Export clips</Button></div></Panel>
-      <div className={`grid gap-4 ${playing ? "lg:h-[min(62vh,42rem)] lg:min-h-[30rem] lg:grid-cols-[minmax(0,1fr)_22rem]" : ""}`}>
+      {details.length ? <Panel className="flex flex-wrap items-center gap-2 p-3"><Label>Full match videos</Label>{details.map((match) => <Button key={match.id} size="sm" disabled={!match.video} title={`Download full match: ${match.title}`} onClick={() => void downloadFullMatch(match)}><Download size={14}/><span className="max-w-40 truncate">{match.title}</span></Button>)}</Panel> : null}
+      <div ref={workspaceRef} data-video-workspace className={`grid gap-4 ${playing ? "lg:h-[min(62vh,42rem)] lg:min-h-[30rem] lg:grid-cols-[minmax(0,1fr)_22rem]" : ""}`}>
         {playing ? <Panel className="flex min-h-0 flex-col overflow-hidden">
-          <div className="aspect-video bg-black xl:min-h-0 xl:flex-1 xl:aspect-auto"><video key={`${playing.url}-${playing.clip.moment.id}`} ref={videoRef} src={playing.url} crossOrigin="anonymous" className="h-full w-full object-contain" playsInline onLoadedMetadata={(event) => { event.currentTarget.currentTime = playing.clip.moment.startTimeSeconds; if (autoPlayRef.current) void event.currentTarget.play(); }} onTimeUpdate={(event) => finishClip(event.currentTarget)} onPlay={() => { autoPlayRef.current = true; setIsPlaying(true); }} onPause={() => setIsPlaying(false)} /></div>
+          <div className="aspect-video bg-black xl:min-h-0 xl:flex-1 xl:aspect-auto"><video key={`${playing.url}-${playing.clip.moment.id}`} ref={videoRef} src={playing.url} crossOrigin="anonymous" className="h-full w-full object-contain" playsInline onLoadedMetadata={(event) => { setVideoDuration(event.currentTarget.duration); setCurrentTime(playing.clip.moment.startTimeSeconds); event.currentTarget.currentTime = playing.clip.moment.startTimeSeconds; if (autoPlayRef.current) void event.currentTarget.play(); }} onTimeUpdate={(event) => { setCurrentTime(event.currentTarget.currentTime); finishClip(event.currentTarget); }} onPlay={() => { autoPlayRef.current = true; setIsPlaying(true); }} onPause={() => setIsPlaying(false)} /></div>
+          <div className="border-t border-white/10 px-3 pt-3"><input aria-label="Clip position" type="range" min={playing.clip.moment.startTimeSeconds} max={Math.min(videoDuration || playing.clip.moment.endTimeSeconds, playing.clip.moment.endTimeSeconds)} step={.1} value={Math.max(playing.clip.moment.startTimeSeconds, Math.min(currentTime, playing.clip.moment.endTimeSeconds))} onChange={(event) => seekTo(Number(event.target.value))} className="h-1.5 w-full cursor-pointer accent-cyan-300"/><div className="mt-2 flex items-center justify-end gap-1"><span className="mr-auto font-mono text-xs text-slate-300">{formatTime(currentTime)} / {formatTime(playing.clip.moment.endTimeSeconds)}</span><Button size="icon" className="h-8 w-8" title="Back 5 seconds (left arrow)" onClick={() => seekTo(currentTime - 5)}><RotateCcw size={14}/></Button><Button size="icon" className="h-8 w-8" variant="primary" onClick={toggleClipPlayback}>{isPlaying ? <Pause size={14}/> : <Play size={14}/>}</Button><Button size="icon" className="h-8 w-8" title="Forward 5 seconds (right arrow)" onClick={() => seekTo(currentTime + 5)}><ChevronsRight size={14}/></Button><VideoFullscreenButton targetRef={workspaceRef}/></div></div>
           <div className="flex items-center justify-between gap-3 p-3"><div className="min-w-0"><p className="truncate text-sm font-semibold text-white">{playing.clip.match.title}</p><p className="truncate text-xs text-slate-500">{playing.clip.moment.momentType.name} · {formatTime(playing.clip.moment.startTimeSeconds)} – {formatTime(playing.clip.moment.endTimeSeconds)}</p></div><Button size="icon" variant="primary" onClick={toggleClipPlayback}>{isPlaying ? <Pause /> : <Play />}</Button></div>
         </Panel> : null}
         <Panel className={`overflow-hidden ${playing ? "lg:flex lg:min-h-0 lg:flex-col" : ""}`}>

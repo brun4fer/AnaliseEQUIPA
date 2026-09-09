@@ -2,6 +2,7 @@ import { createHmac, randomBytes, scryptSync, timingSafeEqual } from "node:crypt
 import { cookies } from "next/headers";
 
 import { prisma } from "@/lib/prisma";
+import { accessAreaDetails, globalAccessDefaultPassword, type AccessArea } from "@/lib/access-areas";
 
 export const SESSION_COOKIE = "feirense_analysis_session";
 
@@ -10,6 +11,11 @@ export class ManagementAccessError extends Error {
     super(message);
     this.name = "ManagementAccessError";
   }
+}
+
+export class AreaAccessError extends Error {
+  areas: AccessArea[];
+  constructor(areas: AccessArea[], message = "Enter the password for this area or the global password to continue.") { super(message); this.name = "AreaAccessError"; this.areas = areas; }
 }
 
 function authSecret() {
@@ -56,6 +62,7 @@ export type SessionPayload = {
   mustChangePassword: boolean;
   needsOnboarding?: boolean;
   managementAccessVersion?: number | null;
+  access?: { globalVersion?: number; areaVersions?: Partial<Record<AccessArea, number>> };
   exp: number;
 };
 
@@ -107,6 +114,30 @@ export async function requireManagementWorkspace() {
   }
   return account;
 }
+
+type WorkspaceAccount = Awaited<ReturnType<typeof requireWorkspace>>;
+
+function areaPassword(account: WorkspaceAccount, area: AccessArea) {
+  switch (area) {
+    case "matches": return [account.workspace.matchesAccessPasswordHash, account.workspace.matchesAccessPasswordVersion] as const;
+    case "newMatch": return [account.workspace.newMatchAccessPasswordHash, account.workspace.newMatchAccessPasswordVersion] as const;
+    case "maps": return [account.workspace.mapsAccessPasswordHash, account.workspace.mapsAccessPasswordVersion] as const;
+    case "reports": return [account.workspace.reportsAccessPasswordHash, account.workspace.reportsAccessPasswordVersion] as const;
+    case "maintenance": return [account.workspace.maintenanceAccessPasswordHash, account.workspace.maintenanceAccessPasswordVersion] as const;
+    case "settings": return [account.workspace.settingsAccessPasswordHash, account.workspace.settingsAccessPasswordVersion] as const;
+    case "help": return [account.workspace.helpAccessPasswordHash, account.workspace.helpAccessPasswordVersion] as const;
+    case "analysis": return [account.workspace.analysisAccessPasswordHash, account.workspace.analysisAccessPasswordVersion] as const;
+  }
+}
+
+export function areaAccessVersion(account: WorkspaceAccount, area: AccessArea) { return areaPassword(account, area)[1]; }
+export function verifyAreaPassword(account: WorkspaceAccount, area: AccessArea, password: string) { const stored = areaPassword(account, area)[0]; return stored ? verifyPassword(password, stored) : password === accessAreaDetails[area].defaultPassword; }
+export function verifyGlobalAccessPassword(account: WorkspaceAccount, password: string) { const stored = account.workspace.globalAccessPasswordHash; return stored ? verifyPassword(password, stored) : password === globalAccessDefaultPassword; }
+export function hasAreaAccess(account: WorkspaceAccount, area: AccessArea) { return account.session.access?.globalVersion === account.workspace.globalAccessPasswordVersion || account.session.access?.areaVersions?.[area] === areaAccessVersion(account, area); }
+export async function requireAreaWorkspace(area: AccessArea | AccessArea[]) { const account = await requireWorkspace(); const areas = Array.isArray(area) ? area : [area]; if (!areas.some((item) => hasAreaAccess(account, item))) throw new AreaAccessError(areas); return account; }
+export async function requireGlobalAccessWorkspace() { const account = await requireWorkspace(); if (account.session.access?.globalVersion !== account.workspace.globalAccessPasswordVersion) throw new AreaAccessError([], "Enter the global password to manage access passwords."); return account; }
+
+export function validateAccessPassword(password: string) { if (password.length < 4) throw new Error("The password must contain at least 4 characters."); }
 
 export function validateManagementPassword(password: string) {
   if (password.length < 8 || !/[A-Za-z]/.test(password) || !/\d/.test(password)) {

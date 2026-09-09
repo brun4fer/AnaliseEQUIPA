@@ -1,8 +1,8 @@
 import { prisma } from "@/lib/prisma";
-import { requireManagementWorkspace } from "@/lib/auth";
+import { requireAreaWorkspace } from "@/lib/auth";
 
 export async function GET() {
-  const { workspace } = await requireManagementWorkspace();
+  const { workspace } = await requireAreaWorkspace("settings");
   const matchWhere = { workspaceId: workspace.id };
   const [seasons, clubs, competitions, matches, videos, momentTypes, subMomentTypes, moments, subMoments] = await Promise.all([
     prisma.season.findMany({ where: matchWhere }),

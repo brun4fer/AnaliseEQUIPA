@@ -1,12 +1,12 @@
 import { handleApiError } from "@/lib/api";
-import { requireWorkspace } from "@/lib/auth";
+import { requireAreaWorkspace } from "@/lib/auth";
 import { serializeMediaAsset } from "@/lib/media-library";
 import { mediaPrisma } from "@/lib/media-prisma";
 import { ensureMediaWorkspace } from "@/lib/media-workspace";
 
 export async function GET() {
   try {
-    const account = await requireWorkspace();
+    const account = await requireAreaWorkspace("analysis");
     const { mediaWorkspace } = await ensureMediaWorkspace(account);
     const assets = await mediaPrisma.mediaAsset.findMany({
       where: { mediaWorkspaceId: mediaWorkspace.id, storageStatus: "READY" },

@@ -9,6 +9,7 @@ import { CloudVideoLibrary } from "@/components/cloud-video-library";
 import { MatchEditDialog } from "@/components/match-edit-dialog";
 import { MomentEditDialog } from "@/components/moment-edit-dialog";
 import { Badge, Button, Panel } from "@/components/ui";
+import { useVideoKeyboardSeek, VideoFullscreenButton } from "@/components/video-controls";
 import type { AccountPayload, MatchDetail, MomentRecord, MomentTypeRecord, SettingsPayload } from "@/lib/domain";
 import { isExportPickerCancellation, pickExportDirectory, writeBlobToDirectory } from "@/lib/export-directory";
 import { apiFetch } from "@/lib/http";
@@ -40,6 +41,7 @@ export function AnalysisWorkspace({ matchId }: { matchId: string }) {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const workspaceRef = useRef<HTMLDivElement | null>(null);
   const sourceFileRef = useRef<File | null>(null);
   const uploadAbortRef = useRef<AbortController | null>(null);
   const [match, setMatch] = useState<MatchDetail | null>(null);
@@ -80,7 +82,7 @@ export function AnalysisWorkspace({ matchId }: { matchId: string }) {
         setTeamName(account?.teamName || "Team");
         setSelectedMomentId(matchData.moments[0]?.id || null);
         if (matchData.video?.storageStatus === "READY") {
-          const remote = await getRemoteVideoUrl(matchId).catch(() => null);
+          const remote = await getRemoteVideoUrl(matchId, "analysis").catch(() => null);
           if (active && remote) {
             setSourceUrl(remote.url);
             setDuration(matchData.video!.durationSeconds);
@@ -123,7 +125,7 @@ export function AnalysisWorkspace({ matchId }: { matchId: string }) {
       }, controller.signal);
       setDuration(result.durationSeconds);
       const [remote, savedMatch] = await Promise.all([
-        getRemoteVideoUrl(matchId),
+        getRemoteVideoUrl(matchId, "analysis"),
         apiFetch<MatchDetail>(`/api/matches/${matchId}`),
       ]);
       setSourceUrl(remote.url);
@@ -161,7 +163,7 @@ export function AnalysisWorkspace({ matchId }: { matchId: string }) {
     try {
       await attachCloudVideo(matchId, asset.id);
       const [remote, savedMatch] = await Promise.all([
-        getRemoteVideoUrl(matchId),
+        getRemoteVideoUrl(matchId, "analysis"),
         apiFetch<MatchDetail>(`/api/matches/${matchId}`),
       ]);
       sourceFileRef.current = null;
@@ -263,6 +265,7 @@ export function AnalysisWorkspace({ matchId }: { matchId: string }) {
   }
 
   function seekBy(seconds: number) { seekTo((videoRef.current?.currentTime ?? currentTime) + seconds); }
+  useVideoKeyboardSeek(videoRef, seekTo, Boolean(sourceUrl));
 
   function goToExactTime() {
     const seconds = Number(seekTime);
@@ -363,7 +366,7 @@ export function AnalysisWorkspace({ matchId }: { matchId: string }) {
 
     const localFile = sourceFileRef.current || await getRememberedMatchVideo(match.id).catch(() => null);
     const remote = !localFile && match.video?.storageStatus === "READY"
-      ? await getRemoteVideoUrl(match.id).catch(() => null)
+      ? await getRemoteVideoUrl(match.id, "analysis").catch(() => null)
       : null;
     const exportSource: File | string | null = localFile || remote?.url || null;
     if (!exportSource) {
@@ -471,7 +474,7 @@ export function AnalysisWorkspace({ matchId }: { matchId: string }) {
     {notice ? <div role="status" aria-live="polite" className="fixed bottom-4 right-4 z-50 flex max-w-sm items-start gap-3 rounded-xl border border-leaf-400/25 bg-pitch-950/95 px-4 py-3 text-sm text-emerald-100 shadow-2xl backdrop-blur-xl"><span className="min-w-0 flex-1">{notice}</span><button type="button" aria-label="Dismiss message" onClick={() => setNotice(null)} className="shrink-0 text-emerald-200/70 transition hover:text-white"><X size={15} /></button></div> : null}
     {exporting ? <div role="status" aria-live="polite" className="fixed bottom-4 right-4 z-50 flex max-w-sm items-center gap-3 rounded-xl border border-leaf-400/25 bg-pitch-950/95 px-4 py-3 text-sm text-emerald-100 shadow-2xl backdrop-blur-xl"><Loader2 size={16} className="shrink-0 animate-spin" /><span className="min-w-0 flex-1">{exportStatus}</span></div> : null}
 
-    <div className="grid min-h-0 flex-1 items-stretch gap-2 xl:grid-cols-[18rem_minmax(0,1fr)]">
+    <div ref={workspaceRef} data-video-workspace className="grid min-h-0 flex-1 items-stretch gap-2 xl:grid-cols-[18rem_minmax(0,1fr)]">
       <Panel className="order-2 flex min-h-0 min-w-0 flex-col overflow-hidden">
         <div className="relative aspect-video min-h-72 shrink-0 bg-black xl:aspect-auto xl:min-h-0 xl:flex-1">{sourceUrl ? <video ref={videoRef} src={sourceUrl} crossOrigin="anonymous" className="h-full w-full object-contain" controls={false} playsInline onLoadedMetadata={(event) => { setDuration(event.currentTarget.duration); event.currentTarget.playbackRate = playbackRate; }} onTimeUpdate={(event) => { const video = event.currentTarget; setCurrentTime(video.currentTime); if (previewEnd !== null && video.currentTime >= previewEnd - .04) { video.pause(); video.currentTime = previewEnd; setPreviewEnd(null); } }} onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onEnded={() => setPlaying(false)} /> : <div className="flex h-full min-h-72 flex-col items-center justify-center p-6 text-center"><FileVideo size={56} className="text-cyan-200" /><h2 className="mt-4 text-xl font-semibold text-white">{restoringVideo ? "Loading the match video…" : match.video?.storageStatus === "LOCAL" ? "Upload the existing match video" : "Upload the match video"}</h2><p className="mt-2 max-w-lg text-sm leading-6 text-slate-400">The video will be stored privately in Cloudflare R2 and will be available on every device signed into this account.</p>{match.video ? <div className="mt-4 w-full max-w-lg rounded-md border border-cyan-300/25 bg-cyan-300/[.07] p-3 text-left"><p className="text-[10px] font-medium uppercase tracking-[.18em] text-cyan-200/70">Expected video</p><p className="mt-1 truncate text-sm font-medium text-cyan-50">{match.video.fileName}</p><p className="mt-1 text-xs text-slate-400">{formatBytes(match.video.fileSize)} · {formatTime(match.video.durationSeconds)}</p></div> : null}<div className="mt-5 flex flex-wrap justify-center gap-2"><Button variant="primary" onClick={() => fileInputRef.current?.click()}><Upload size={16} />Upload new</Button><Button variant="secondary" onClick={() => void openCloudLibrary()}><Cloud size={16} />Cloud library</Button></div></div>}{uploading ? <div className="absolute inset-x-0 bottom-0 h-1 bg-white/10"><div className="h-full bg-cyan-300 transition-[width]" style={{ width: `${Math.round(uploadProgress * 100)}%` }} /></div> : null}</div>
         <div className="shrink-0 border-t border-white/10 bg-pitch-950/90 p-2">
@@ -490,7 +493,7 @@ export function AnalysisWorkspace({ matchId }: { matchId: string }) {
               </div>
               <form className="ml-1 flex items-center gap-1 border-l border-white/10 pl-2" onSubmit={(event) => { event.preventDefault(); goToExactTime(); }}><input aria-label="Exact second" className="h-8 w-20 rounded-md border border-white/10 bg-black/20 px-2 font-mono text-[10px] text-white outline-none placeholder:text-slate-600 focus:border-cyan-300/50" type="number" min="0" max={duration || undefined} step="0.1" placeholder="Second" value={seekTime} onChange={(event) => setSeekTime(event.target.value)} disabled={!sourceUrl} /><Button type="submit" size="sm" className="h-8 px-2 text-[10px]" variant="secondary" disabled={!sourceUrl || seekTime === ""}>Go</Button></form>
             </div></div>
-            <div className="flex shrink-0 items-center gap-2"><span className="hidden items-center gap-1 font-mono text-xs text-white sm:inline-flex"><Clock3 size={13} className="text-cyan-200" />{formatTime(currentTime)} / {formatTime(duration)}</span><Link href={`/analysis/${matchId}/submoments`}><Button size="sm" variant="primary" className="h-8 whitespace-nowrap px-2 text-[10px]" disabled={match.moments.length === 0 || activeMoments.length > 0}>Identify submoments <ChevronsRight size={13} /></Button></Link></div>
+            <div className="flex shrink-0 items-center gap-2"><span className="hidden items-center gap-1 font-mono text-xs text-white sm:inline-flex"><Clock3 size={13} className="text-cyan-200" />{formatTime(currentTime)} / {formatTime(duration)}</span><VideoFullscreenButton targetRef={workspaceRef}/><Link href={`/analysis/${matchId}/submoments`}><Button size="sm" variant="primary" className="h-8 whitespace-nowrap px-2 text-[10px]" disabled={match.moments.length === 0 || activeMoments.length > 0}>Identify submoments <ChevronsRight size={13} /></Button></Link></div>
           </div>
         </div>
       </Panel>
