@@ -2,7 +2,7 @@ import { createHmac, randomBytes, scryptSync, timingSafeEqual } from "node:crypt
 import { cookies } from "next/headers";
 
 import { prisma } from "@/lib/prisma";
-import { accessAreaDetails, globalAccessDefaultPassword, type AccessArea } from "@/lib/access-areas";
+import { accessAreaDetails, areaPasswordsEnabled, globalAccessDefaultPassword, type AccessArea } from "@/lib/access-areas";
 
 export const SESSION_COOKIE = "feirense_analysis_session";
 
@@ -133,7 +133,7 @@ function areaPassword(account: WorkspaceAccount, area: AccessArea) {
 export function areaAccessVersion(account: WorkspaceAccount, area: AccessArea) { return areaPassword(account, area)[1]; }
 export function verifyAreaPassword(account: WorkspaceAccount, area: AccessArea, password: string) { const stored = areaPassword(account, area)[0]; return stored ? verifyPassword(password, stored) : password === accessAreaDetails[area].defaultPassword; }
 export function verifyGlobalAccessPassword(account: WorkspaceAccount, password: string) { const stored = account.workspace.globalAccessPasswordHash; return stored ? verifyPassword(password, stored) : password === globalAccessDefaultPassword; }
-export function hasAreaAccess(account: WorkspaceAccount, area: AccessArea) { return account.session.access?.globalVersion === account.workspace.globalAccessPasswordVersion || account.session.access?.areaVersions?.[area] === areaAccessVersion(account, area); }
+export function hasAreaAccess(account: WorkspaceAccount, area: AccessArea) { return !areaPasswordsEnabled || account.session.access?.globalVersion === account.workspace.globalAccessPasswordVersion || account.session.access?.areaVersions?.[area] === areaAccessVersion(account, area); }
 export async function requireAreaWorkspace(area: AccessArea | AccessArea[]) { const account = await requireWorkspace(); const areas = Array.isArray(area) ? area : [area]; if (!areas.some((item) => hasAreaAccess(account, item))) throw new AreaAccessError(areas); return account; }
 export async function requireGlobalAccessWorkspace() { const account = await requireWorkspace(); if (account.session.access?.globalVersion !== account.workspace.globalAccessPasswordVersion) throw new AreaAccessError([], "Enter the global password to manage access passwords."); return account; }
 

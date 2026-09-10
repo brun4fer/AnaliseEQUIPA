@@ -8,6 +8,7 @@ import { ManagementPasswordPanel } from "@/components/management-password-panel"
 import { MediaLibraryLinkPanel } from "@/components/media-library-link-panel";
 import type { MomentTypeRecord, SettingsPayload, SubMomentTypeRecord } from "@/lib/domain";
 import { apiFetch } from "@/lib/http";
+import { areaPasswordsEnabled } from "@/lib/access-areas";
 
 const emptyMoment = { name: "", code: "", color: "#2dd66f", defaultShortcut: "", allowedSubmomentIds: [] as string[] };
 const emptySubmoment = {
@@ -172,7 +173,7 @@ export function SettingsClient() {
         <div className="rounded-xl border border-red-400/25 bg-red-500/10 p-3 text-sm text-red-100">{error}</div>
       ) : null}
 
-      <ManagementPasswordPanel />
+      {areaPasswordsEnabled ? <ManagementPasswordPanel /> : null}
 
       <MediaLibraryLinkPanel />
 
