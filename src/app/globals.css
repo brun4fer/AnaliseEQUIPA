@@ -59,3 +59,34 @@ video { background: #020808; }
 [data-video-workspace]:fullscreen > * {
   min-height: 0;
 }
+
+.reports-video-workspace:fullscreen {
+  height: 100vh !important;
+  grid-template-columns: minmax(0, 1fr) 22rem;
+  align-items: stretch;
+}
+
+.reports-video-workspace:fullscreen .reports-video-panel,
+.reports-video-workspace:fullscreen .reports-video-stage,
+.reports-video-workspace:fullscreen .reports-clip-list {
+  min-height: 0;
+}
+
+.reports-video-workspace:fullscreen .reports-video-stage {
+  flex: 1 1 0%;
+  aspect-ratio: auto;
+}
+
+@media (max-width: 899px) {
+  .reports-video-workspace:fullscreen {
+    display: block;
+  }
+
+  .reports-video-workspace:fullscreen .reports-video-panel {
+    height: 100%;
+  }
+
+  .reports-video-workspace:fullscreen .reports-clip-list {
+    display: none;
+  }
+}

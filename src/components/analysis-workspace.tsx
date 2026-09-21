@@ -3,12 +3,12 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Archive, ArrowLeft, Check, ChevronsLeft, ChevronsRight, Clock3, Cloud, FileVideo, Loader2, Pause, Pencil, Play, RotateCcw, Settings2, Trash2, Upload, X } from "lucide-react";
+import { Archive, ArrowLeft, Check, ChevronsLeft, ChevronsRight, Clock3, Cloud, FileVideo, Loader2, Pause, Pencil, Play, RotateCcw, Settings2, SlidersHorizontal, Trash2, Upload, X } from "lucide-react";
 
 import { CloudVideoLibrary } from "@/components/cloud-video-library";
 import { MatchEditDialog } from "@/components/match-edit-dialog";
 import { MomentEditDialog } from "@/components/moment-edit-dialog";
-import { Badge, Button, Panel } from "@/components/ui";
+import { Badge, Button, Label, Panel, Select } from "@/components/ui";
 import { useVideoKeyboardSeek, VideoFullscreenButton } from "@/components/video-controls";
 import type { AccountPayload, MatchDetail, MomentRecord, MomentTypeRecord, SettingsPayload } from "@/lib/domain";
 import { isExportPickerCancellation, pickExportDirectory, writeBlobToDirectory } from "@/lib/export-directory";
@@ -18,7 +18,7 @@ import { getMatchPeriodAtTime } from "@/lib/match-periods";
 import { attachCloudVideo, getCloudVideoLibrary, getRemoteVideoUrl, uploadMatchVideo, type CloudVideoAsset } from "@/lib/remote-video-store";
 import { SmartVideoExportSession } from "@/lib/smart-video-export";
 import { formatBytes, formatTime, roundTime } from "@/lib/time";
-import { downloadBlob } from "@/lib/video-export";
+import { downloadBlob, exportQualityOptions, type ExportQuality } from "@/lib/video-export";
 
 type ActiveMoment = { id: string; momentTypeId: string; startTimeSeconds: number };
 type PeriodMarkerKey = "firstHalfStartSeconds" | "firstHalfEndSeconds" | "secondHalfStartSeconds" | "secondHalfEndSeconds";
@@ -64,6 +64,9 @@ export function AnalysisWorkspace({ matchId }: { matchId: string }) {
   const [saving, setSaving] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [exportStatus, setExportStatus] = useState("");
+  const [showExportOptions, setShowExportOptions] = useState(false);
+  const [exportQuality, setExportQuality] = useState<ExportQuality>("high");
+  const [exportLayout, setExportLayout] = useState<"grouped" | "individual">("grouped");
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [showCloudLibrary, setShowCloudLibrary] = useState(false);
@@ -403,14 +406,14 @@ export function AnalysisWorkspace({ matchId }: { matchId: string }) {
         const result = await session.exportMoment({
           match,
           moment,
-          quality: "high",
+          quality: exportQuality,
           sourceUrlFallback: exportUrl,
           onStatus: (message) => setExportStatus(`${current} of ${moments.length}: ${message}`)
         });
         const folders = [...new Set(moment.subMoments.map((item) => item.subMomentType.name))];
         if (folders.length === 0) folders.push("No submoment");
         const fileName = `${String(current).padStart(3, "0")}-${result.fileName}`;
-        const paths = folders.map((folder) => `${safeExportName(moment.momentType.name)}/${safeExportName(folder)}/${fileName}`);
+        const paths = exportLayout === "grouped" ? folders.map((folder) => `${safeExportName(moment.momentType.name)}/${safeExportName(folder)}/${fileName}`) : [fileName];
 
         for (const path of paths) {
           if (directory) await writeBlobToDirectory(directory, `${root}/${path}`, result.blob);
@@ -499,15 +502,19 @@ export function AnalysisWorkspace({ matchId }: { matchId: string }) {
       </Panel>
 
       <Panel className="order-1 flex min-h-48 flex-col overflow-hidden xl:min-h-0">
-        <div className="shrink-0 border-b border-white/10 px-3 py-3"><div className="flex items-start justify-between gap-2"><div><p className="text-xs uppercase tracking-[0.2em] text-slate-500">Tagged moments</p><p className="mt-1 text-xs text-slate-400">{match.moments.length} in the video</p></div><Button size="sm" variant="secondary" className="shrink-0 px-2" disabled={match.moments.length === 0 || exporting} title={exporting ? exportStatus : "Export all tagged moments"} onClick={() => void exportAllMoments()}>{exporting ? <Loader2 size={14} className="animate-spin" /> : <Archive size={14} />}{exporting ? "Exporting" : "Export all"}</Button></div>{exporting && exportStatus ? <p className="mt-2 text-[10px] leading-4 text-cyan-100">{exportStatus}</p> : <p className="mt-2 text-[10px] leading-4 text-slate-500">Select a row to review or export.</p>}</div>
-        <div className="min-h-0 flex-1 overflow-y-auto">{match.moments.length === 0 ? <p className="p-3 text-xs leading-5 text-slate-500">Completed moments appear here.</p> : match.moments.map((moment) => <div key={moment.id} className={`flex min-h-9 w-full items-center gap-1.5 border-b border-white/[.06] px-2.5 py-1 text-left transition hover:bg-white/[.06] ${selectedMomentId === moment.id ? "bg-cyan-300/10 text-cyan-100" : ""}`}><button type="button" className="flex min-w-0 flex-1 items-center gap-2" onClick={() => reviewMoment(moment)} title={`${moment.momentType.name} · ${formatTime(moment.startTimeSeconds)}`}><span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: moment.momentType.color }} /><span className="min-w-0 flex-1 truncate text-xs text-slate-200">{moment.momentType.name}</span><span className="shrink-0 font-mono text-[10px] text-slate-500">{formatTime(moment.startTimeSeconds)}</span></button><button aria-label="Mark as positive" onClick={() => void toggleOutcome(moment, "positive")} className={`flex h-6 w-6 shrink-0 items-center justify-center rounded border transition ${moment.outcome === "positive" ? "border-emerald-300 bg-emerald-400 text-emerald-950" : "border-emerald-400/25 bg-emerald-400/10 text-emerald-300"}`}><Check size={11} /></button><button aria-label="Mark as negative" onClick={() => void toggleOutcome(moment, "negative")} className={`flex h-6 w-6 shrink-0 items-center justify-center rounded border transition ${moment.outcome === "negative" ? "border-red-300 bg-red-400 text-red-950" : "border-red-400/25 bg-red-400/10 text-red-300"}`}><X size={11} /></button><button type="button" className="inline-flex h-6 items-center gap-1 rounded-md border border-cyan-300/25 bg-cyan-300/10 px-1.5 text-[10px] font-medium text-cyan-100 hover:bg-cyan-300/20" onClick={() => setEditingMoment(moment)} aria-label="Edit moment"><Pencil size={11} />Edit</button><button type="button" className="inline-flex h-6 items-center gap-1 rounded-md border border-red-400/30 bg-red-500/10 px-1.5 text-[10px] font-medium text-red-100 hover:bg-red-500/25" onClick={() => void removeMoment(moment)} aria-label="Delete moment"><Trash2 size={11} />Delete</button></div>)}</div>
+        <div className="shrink-0 border-b border-white/10 px-3 py-2">
+          <div className="flex items-center justify-between gap-2"><div><p className="text-xs uppercase tracking-[0.2em] text-slate-500">Tagged moments</p><p className="text-[10px] text-slate-400">{match.moments.length} in the video</p></div><div className="flex gap-1"><Button size="icon" variant="secondary" className="h-8 w-8" title="Export options" aria-label="Export options" aria-expanded={showExportOptions} onClick={() => setShowExportOptions((value) => !value)}><SlidersHorizontal size={13}/></Button><Button size="sm" variant="secondary" className="h-8 shrink-0 px-2" disabled={match.moments.length === 0 || exporting} title={exporting ? exportStatus : "Export all tagged moments"} onClick={() => void exportAllMoments()}>{exporting ? <Loader2 size={14} className="animate-spin" /> : <Archive size={14} />}{exporting ? "Exporting" : "Export all"}</Button></div></div>
+          {showExportOptions ? <div className="mt-2 grid gap-2 rounded-md border border-white/10 bg-black/15 p-2"><label className="grid gap-1"><Label className="text-[9px]">Quality</Label><Select className="h-8 py-0 text-[10px]" value={exportQuality} onChange={(event) => setExportQuality(event.target.value as ExportQuality)}>{exportQualityOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</Select></label><label className="grid gap-1"><Label className="text-[9px]">Organisation</Label><Select className="h-8 py-0 text-[10px]" value={exportLayout} onChange={(event) => setExportLayout(event.target.value as "grouped" | "individual")}><option value="grouped">Grouped by moment/submoment</option><option value="individual">Individual clips in one folder</option></Select></label></div> : null}
+          {exporting && exportStatus ? <p className="mt-2 text-[10px] leading-4 text-cyan-100">{exportStatus}</p> : null}
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto">{match.moments.length === 0 ? <p className="p-3 text-xs leading-5 text-slate-500">Completed moments appear here.</p> : match.moments.map((moment, index) => <div key={moment.id} className={`flex h-8 w-full items-center gap-1 border-b border-white/[.06] px-2 text-left transition hover:bg-white/[.06] ${selectedMomentId === moment.id ? "bg-cyan-300/10 text-cyan-100" : ""}`}><button type="button" className="flex min-w-0 flex-1 items-center gap-1.5" onClick={() => reviewMoment(moment)} title={`${moment.momentType.name} · ${formatTime(moment.startTimeSeconds)}–${formatTime(moment.endTimeSeconds)}`}><span className="w-6 shrink-0 text-right font-mono text-[9px] text-slate-500">#{index + 1}</span><span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: moment.momentType.color }} /><span className="min-w-0 flex-1 truncate font-mono text-[9px] text-slate-300">{formatTime(moment.startTimeSeconds)}–{formatTime(moment.endTimeSeconds)}</span><Badge className="shrink-0 px-1 py-0 text-[8px]">{moment.subMoments.length} sub.</Badge></button><button title="Mark as positive" aria-label="Mark as positive" onClick={() => void toggleOutcome(moment, "positive")} className={`flex h-6 w-6 shrink-0 items-center justify-center rounded border transition ${moment.outcome === "positive" ? "border-emerald-300 bg-emerald-400 text-emerald-950" : "border-emerald-400/25 bg-emerald-400/10 text-emerald-300"}`}><Check size={11} /></button><button title="Mark as negative" aria-label="Mark as negative" onClick={() => void toggleOutcome(moment, "negative")} className={`flex h-6 w-6 shrink-0 items-center justify-center rounded border transition ${moment.outcome === "negative" ? "border-red-300 bg-red-400 text-red-950" : "border-red-400/25 bg-red-400/10 text-red-300"}`}><X size={11} /></button><button type="button" title="Edit clip" className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-cyan-300/25 bg-cyan-300/10 text-cyan-100 hover:bg-cyan-300/20" onClick={() => setEditingMoment(moment)} aria-label="Edit clip"><Pencil size={11} /></button><button type="button" title="Delete clip" className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-red-400/30 bg-red-500/10 text-red-100 hover:bg-red-500/25" onClick={() => void removeMoment(moment)} aria-label="Delete clip"><Trash2 size={11} /></button></div>)}</div>
       </Panel>
 
     </div>
 
     <Timeline momentTypes={settings.momentTypes} moments={match.moments} duration={timelineDuration} selectedMomentId={selectedMomentId} onSelect={reviewMoment} />
 
-    {editingMoment ? <MomentEditDialog moment={editingMoment} momentTypes={settings.momentTypes} currentTime={currentTime} duration={duration || match.video?.durationSeconds || 0} onSave={(input) => updateMoment(editingMoment, input)} onClose={() => setEditingMoment(null)} /> : null}
+    {editingMoment ? <MomentEditDialog moment={editingMoment} momentTypes={settings.momentTypes} duration={duration || match.video?.durationSeconds || 0} onSave={(input) => updateMoment(editingMoment, input)} onClose={() => setEditingMoment(null)} /> : null}
     {editingMatch ? <MatchEditDialog match={match} onSave={saveMatch} onDelete={removeCurrentMatch} onClose={() => setEditingMatch(false)} /> : null}
     {showCloudLibrary ? <CloudVideoLibrary assets={cloudAssets} loading={loadingCloudLibrary} error={cloudLibraryError} attachingAssetId={attachingAssetId} onRetry={() => void openCloudLibrary()} onClose={() => !attachingAssetId && setShowCloudLibrary(false)} onSelect={(asset) => void attachSelectedCloudVideo(asset)} /> : null}
   </div>;
