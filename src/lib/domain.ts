@@ -146,3 +146,18 @@ export type MapPoint = {
   period: "first_half" | "second_half" | null;
   attackDirection: "left_to_right" | "right_to_left" | null;
 };
+
+export type MapMoment = {
+  id: string;
+  matchId: string;
+  matchTitle: string;
+  momentTypeId: string;
+  momentTypeName: string;
+  color: string;
+  startTimeSeconds: number;
+  endTimeSeconds: number;
+  outcome: string | null;
+  period: "first_half" | "second_half" | null;
+  attackDirection: "left_to_right" | "right_to_left" | null;
+  subMomentTypeIds: string[];
+};

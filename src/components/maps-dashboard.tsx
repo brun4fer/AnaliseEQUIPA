@@ -6,7 +6,7 @@ import { ArrowRightLeft, BarChart3, ChevronsRight, FileVideo, Filter, Loader2, M
 import { GoalSurface, PitchSurface } from "@/components/analysis-surfaces";
 import { Badge, Button, Label, Panel, Select } from "@/components/ui";
 import { useVideoKeyboardSeek, VideoFullscreenButton } from "@/components/video-controls";
-import type { MapPoint, MatchSummary, MomentTypeRecord, SettingsPayload, SubMomentTypeRecord } from "@/lib/domain";
+import type { MapMoment, MapPoint, MatchSummary, MomentTypeRecord, SettingsPayload, SubMomentTypeRecord } from "@/lib/domain";
 import { apiFetch } from "@/lib/http";
 import { getRememberedMatchVideo, rememberMatchVideo } from "@/lib/local-video-store";
 import { attackDirectionLabel, matchPeriodLabel, normalizeFieldX } from "@/lib/match-periods";
@@ -28,6 +28,7 @@ export function MapsDashboard() {
   const advancingRef = useRef(false);
   const remoteUrlsRef = useRef(new Map<string, string>());
   const [points, setPoints] = useState<MapPoint[]>([]);
+  const [mapMoments, setMapMoments] = useState<MapMoment[]>([]);
   const [matches, setMatches] = useState<MatchSummary[]>([]);
   const [settings, setSettings] = useState<SettingsPayload | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>("map");
@@ -48,9 +49,9 @@ export function MapsDashboard() {
   const [videoDuration, setVideoDuration] = useState(0);
 
   useEffect(() => {
-    Promise.all([apiFetch<MapPoint[]>("/api/maps"), apiFetch<MatchSummary[]>("/api/matches"), apiFetch<SettingsPayload>("/api/settings")])
-      .then(([mapPoints, matchRows, settingsData]) => {
-        setPoints(mapPoints); setMatches(matchRows); setSettings(settingsData);
+    Promise.all([apiFetch<MapPoint[]>("/api/maps"), apiFetch<MapMoment[]>("/api/maps/moments"), apiFetch<MatchSummary[]>("/api/matches"), apiFetch<SettingsPayload>("/api/settings")])
+      .then(([mapPoints, momentRows, matchRows, settingsData]) => {
+        setPoints(mapPoints); setMapMoments(momentRows); setMatches(matchRows); setSettings(settingsData);
         if (matchRows.length) {
           setCompareA(matchRows[0].id);
           setCompareB(matchRows[1]?.id || "");
@@ -78,10 +79,25 @@ export function MapsDashboard() {
     );
   }
 
+  function filterMoments(targetMatchId: string, includeAll = false) {
+    if (!targetMatchId || targetMatchId === "unselected") return [];
+    return mapMoments.filter((moment) =>
+      (includeAll && targetMatchId === "all" ? true : moment.matchId === targetMatchId)
+      && (!momentTypeId || moment.momentTypeId === momentTypeId)
+      && (!submomentTypeId || moment.subMomentTypeIds.includes(submomentTypeId))
+      && (period === "both" ? moment.period !== null : moment.period === period)
+    );
+  }
+
   const filtered = useMemo(() => filterPoints(matchId, true), [matchId, momentTypeId, points, period, submomentTypeId]); // eslint-disable-line react-hooks/exhaustive-deps
   const comparisonA = useMemo(() => filterPoints(compareA), [compareA, momentTypeId, points, period, submomentTypeId]); // eslint-disable-line react-hooks/exhaustive-deps
   const comparisonB = useMemo(() => filterPoints(compareB), [compareB, momentTypeId, points, period, submomentTypeId]); // eslint-disable-line react-hooks/exhaustive-deps
-  const selectedPoint = filtered.find((point) => point.id === selectedPointId) || null;
+  const filteredMoments = useMemo(() => filterMoments(matchId, true), [mapMoments, matchId, momentTypeId, period, submomentTypeId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const comparisonMomentsA = useMemo(() => filterMoments(compareA), [compareA, mapMoments, momentTypeId, period, submomentTypeId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const comparisonMomentsB = useMemo(() => filterMoments(compareB), [compareB, mapMoments, momentTypeId, period, submomentTypeId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const playableFiltered = useMemo(() => submomentTypeId ? filtered : filteredMoments.map(momentToPlaybackPoint), [filtered, filteredMoments, submomentTypeId]);
+  const mappedOccurrenceCount = filtered.filter(hasCoordinates).length;
+  const selectedPoint = filtered.find((point) => point.id === selectedPointId) || playableFiltered.find((point) => point.id === selectedPointId) || null;
   const selectedClipStart = selectedPoint?.momentStartTimeSeconds ?? 0;
   const selectedClipEnd = selectedPoint?.momentEndTimeSeconds ?? 0;
   const baseForUnassigned = matchId === "unselected" ? [] : points.filter((point) => (matchId === "all" || point.matchId === matchId) && (!momentTypeId || point.momentTypeId === momentTypeId) && (!submomentTypeId || point.subMomentTypeId === submomentTypeId));
@@ -91,9 +107,9 @@ export function MapsDashboard() {
   const goalPoints = toSurfacePoints(filtered, coordinateMode, selectedPointId, "goal");
 
   useEffect(() => {
-    if (!selectedPointId || filtered.some((point) => point.id === selectedPointId)) return;
+    if (!selectedPointId || filtered.some((point) => point.id === selectedPointId) || playableFiltered.some((point) => point.id === selectedPointId)) return;
     resetVideoSelection();
-  }, [filtered, selectedPointId]);
+  }, [filtered, playableFiltered, selectedPointId]);
 
   function resetVideoSelection() {
     playlistActiveRef.current = false; advancingRef.current = false; setSelectedPointId(null); videoRequestRef.current += 1; setSourceUrl(null); setVideoNotice(null);
@@ -107,7 +123,8 @@ export function MapsDashboard() {
   }
 
   async function selectPoint(id: string, fromPlaylist = false) {
-    const point = points.find((item) => item.id === id);
+    const moment = id.startsWith("moment:") ? mapMoments.find((item) => `moment:${item.id}` === id) : undefined;
+    const point = points.find((item) => item.id === id) || (moment ? momentToPlaybackPoint(moment) : undefined);
     if (!point) return;
     autoPlayRef.current = true; playlistActiveRef.current = fromPlaylist; if (!fromPlaylist) advancingRef.current = false;
     setSelectedPointId(id); setVideoNotice(null); setVideoLoading(true); setSourceUrl(null);
@@ -146,16 +163,29 @@ export function MapsDashboard() {
 
   function stopPlaylist() { autoPlayRef.current = false; playlistActiveRef.current = false; videoRef.current?.pause(); }
   function pointsForSubmoment(typeId: string) { return filtered.filter((point) => point.subMomentTypeId === typeId); }
-  function playAll(nextPoints = filtered) { if (!nextPoints.length) return; playlistActiveRef.current = true; autoPlayRef.current = true; advancingRef.current = false; void selectPoint(nextPoints[0].id, true); }
+  function momentsForType(typeId: string) {
+    if (!hasMatchSelection) return [];
+    return mapMoments.filter((moment) =>
+      (matchId === "all" || moment.matchId === matchId)
+      && moment.momentTypeId === typeId
+      && (period === "both" ? moment.period !== null : moment.period === period)
+    );
+  }
+  function playAll(nextPoints = playableFiltered) { if (!nextPoints.length) return; playlistActiveRef.current = true; autoPlayRef.current = true; advancingRef.current = false; void selectPoint(nextPoints[0].id, true); }
   function selectActionAndPlay(typeId: string) { const next = filtered.filter((point) => point.subMomentTypeId === typeId); setSubmomentTypeId(typeId); if (next.length) playAll(next); else stopPlaylist(); }
+  function selectMomentAndPlay(typeId: string) {
+    const next = momentsForType(typeId).map(momentToPlaybackPoint);
+    stopPlaylist(); setMomentTypeId(typeId); setSubmomentTypeId("");
+    if (next.length) playAll(next);
+  }
 
   function finishSelectedClip(video: HTMLVideoElement) {
     if (!selectedPoint || advancingRef.current) return;
     const end = Math.min(video.duration, selectedClipEnd);
     if (video.currentTime < end - .04) return;
     advancingRef.current = true; video.pause(); video.currentTime = end;
-    const selectedIndex = filtered.findIndex((point) => point.id === selectedPoint.id);
-    if (playlistActiveRef.current && selectedIndex >= 0 && selectedIndex < filtered.length - 1) void selectPoint(filtered[selectedIndex + 1].id, true).finally(() => { advancingRef.current = false; });
+    const selectedIndex = playableFiltered.findIndex((point) => point.id === selectedPoint.id);
+    if (playlistActiveRef.current && selectedIndex >= 0 && selectedIndex < playableFiltered.length - 1) void selectPoint(playableFiltered[selectedIndex + 1].id, true).finally(() => { advancingRef.current = false; });
     else { playlistActiveRef.current = false; advancingRef.current = false; }
   }
 
@@ -187,11 +217,12 @@ export function MapsDashboard() {
       <label className="grid gap-2"><Label>Submoment</Label><Select value={submomentTypeId} onChange={(event) => { stopPlaylist(); setSubmomentTypeId(event.target.value); }}><option value="">All submoments</option>{availableSubmomentTypes.map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}</Select></label>
       <label className="grid gap-2"><Label>Match period</Label><Select value={period} onChange={(event) => { stopPlaylist(); setPeriod(event.target.value as MapPeriod); }}><option value="both">Both halves</option><option value="first_half">1st half</option><option value="second_half">2nd half</option></Select></label>
       <label className="grid gap-2"><Label>Coordinates</Label><Select value={coordinateMode} onChange={(event) => setCoordinateMode(event.target.value as CoordinateMode)}><option value="normalized">Normalized · Attack →</option><option value="original">Original video position</option></Select></label>
-      {viewMode === "map" ? <div className="flex gap-2"><Badge className="h-10 flex-1 justify-center px-3"><Filter size={14} className="mr-2" />{hasMatchSelection ? filtered.length : 0}</Badge><Button className="h-10" variant="primary" disabled={!filtered.length || videoLoading} onClick={() => playAll()}><Play size={15} />Play all</Button></div> : null}
+      {viewMode === "map" ? <div className="flex gap-2"><Badge className="h-10 flex-1 justify-center px-3" title={`${mappedOccurrenceCount} occurrences with coordinates`}><Filter size={14} className="mr-2" />{hasMatchSelection ? filteredMoments.length : 0} moments</Badge><Button className="h-10" variant="primary" disabled={!playableFiltered.length || videoLoading} onClick={() => playAll()}><Play size={15} />Play all</Button></div> : null}
     </Panel>
 
-    {viewMode === "compare" ? <ComparisonView matchA={matchA} matchB={matchB} pointsA={comparisonA} pointsB={comparisonB} coordinateMode={coordinateMode} period={period} momentTypes={settings?.momentTypes || []} submomentTypes={availableSubmomentTypes} /> : <>
+    {viewMode === "compare" ? <ComparisonView matchA={matchA} matchB={matchB} pointsA={comparisonA} pointsB={comparisonB} momentsA={comparisonMomentsA} momentsB={comparisonMomentsB} coordinateMode={coordinateMode} period={period} momentTypes={settings?.momentTypes || []} submomentTypes={availableSubmomentTypes} /> : <>
       {unassignedCount > 0 ? <p className="text-xs text-amber-200">{unassignedCount} occurrences are hidden until the match-period markers are configured.</p> : null}
+      {hasMatchSelection && filteredMoments.length > 0 && mappedOccurrenceCount === 0 ? <Panel className="border-cyan-300/20 px-4 py-3 text-xs text-cyan-100">{filteredMoments.length} marked moments were found. They can be played and compared, but no points appear on the pitch because these moments do not yet have submoments with coordinates.</Panel> : null}
       <div ref={workspaceRef} data-video-workspace className="maps-surfaces grid grid-cols-[minmax(0,1.35fr)_minmax(0,.65fr)] items-start gap-2 sm:gap-5">
         <Panel className="min-w-0 p-2 sm:p-4"><div className="flex items-center justify-between gap-2"><div className="min-w-0"><Label>Pitch</Label><p className="mt-1 truncate text-[10px] text-slate-500 sm:text-xs">{hasMatchSelection ? coordinateMode === "normalized" ? "All attacks are shown towards the right." : "Points match their original video position." : "Select a match above."}</p></div><MapPinned className="shrink-0 text-leaf-400" /></div><PitchSurface className="mt-3 sm:mt-4" points={fieldPoints} onPointSelect={(id) => void selectPoint(id)} /></Panel>
         <div className="min-w-0 space-y-2 sm:space-y-5">
@@ -199,7 +230,7 @@ export function MapsDashboard() {
           <VideoPanel selectedPoint={selectedPoint} sourceUrl={sourceUrl} videoLoading={videoLoading} videoNotice={videoNotice} selectedClipStart={selectedClipStart} selectedClipEnd={selectedClipEnd} currentTime={currentTime} videoDuration={videoDuration} videoRef={videoRef} workspaceRef={workspaceRef} matches={matches} onUseLocal={() => fileInputRef.current?.click()} onLoaded={(video) => { const end = Math.min(video.duration, selectedClipEnd); setVideoDuration(video.duration); setCurrentTime(Math.min(selectedClipStart, end)); video.currentTime = Math.min(selectedClipStart, end); if (autoPlayRef.current) void video.play(); }} onTimeUpdate={(video) => { setCurrentTime(video.currentTime); finishSelectedClip(video); }} onSeek={seekTo} />
         </div>
       </div>
-      <Panel className="p-4"><div className="flex items-center justify-between gap-3"><div><Label>Actions</Label><p className="mt-1 text-[10px] text-slate-500">Select an action to play all of its occurrences.</p></div>{submomentTypeId ? <Button size="sm" onClick={() => { stopPlaylist(); setSubmomentTypeId(""); }}>Show all</Button> : null}</div><div className="mt-3 flex flex-wrap gap-2">{availableSubmomentTypes.map((type) => { const count = pointsForSubmoment(type.id).length; const active = submomentTypeId === type.id; return <button type="button" key={type.id} disabled={!count} onClick={() => selectActionAndPlay(type.id)} className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition disabled:cursor-not-allowed disabled:opacity-40 ${active ? "bg-white/[.12] text-white ring-1 ring-white/20" : "border-white/10 bg-white/[.04] text-slate-300 hover:bg-white/[.09]"}`} style={active ? { borderColor: type.color } : undefined}><span className="h-3 w-3 rounded-full" style={{ backgroundColor: type.color }} />{type.name}<strong className="text-white">{count}</strong><Play size={11} className="text-slate-500" /></button>; })}</div></Panel>
+      <Panel className="p-4"><div className="flex items-center justify-between gap-3"><div><Label>Marked moments</Label><p className="mt-1 text-[10px] text-slate-500">Select a moment to play every marked clip, even when it has no mapped submoments.</p></div>{momentTypeId ? <Button size="sm" onClick={() => { stopPlaylist(); setMomentTypeId(""); setSubmomentTypeId(""); }}>Show all</Button> : null}</div><div className="mt-3 flex flex-wrap gap-2">{settings?.momentTypes.map((type) => { const count = momentsForType(type.id).length; const active = momentTypeId === type.id && !submomentTypeId; return <button type="button" key={type.id} disabled={!count} onClick={() => selectMomentAndPlay(type.id)} className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition disabled:cursor-not-allowed disabled:opacity-40 ${active ? "bg-white/[.12] text-white ring-1 ring-white/20" : "border-white/10 bg-white/[.04] text-slate-300 hover:bg-white/[.09]"}`} style={active ? { borderColor: type.color } : undefined}><span className="h-3 w-3 rounded-full" style={{ backgroundColor: type.color }} />{type.name}<strong className="text-white">{count}</strong><Play size={11} className="text-slate-500" /></button>; })}</div><div className="mt-4 border-t border-white/10 pt-4"><div className="flex items-center justify-between gap-3"><div><Label>Identified submoments</Label><p className="mt-1 text-[10px] text-slate-500">Submoments appear as points on the pitch or goal when coordinates were recorded.</p></div>{submomentTypeId ? <Button size="sm" onClick={() => { stopPlaylist(); setSubmomentTypeId(""); }}>Show all</Button> : null}</div><div className="mt-3 flex flex-wrap gap-2">{availableSubmomentTypes.map((type) => { const count = pointsForSubmoment(type.id).length; const active = submomentTypeId === type.id; return <button type="button" key={type.id} disabled={!count} onClick={() => selectActionAndPlay(type.id)} className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition disabled:cursor-not-allowed disabled:opacity-40 ${active ? "bg-white/[.12] text-white ring-1 ring-white/20" : "border-white/10 bg-white/[.04] text-slate-300 hover:bg-white/[.09]"}`} style={active ? { borderColor: type.color } : undefined}><span className="h-3 w-3 rounded-full" style={{ backgroundColor: type.color }} />{type.name}<strong className="text-white">{count}</strong><Play size={11} className="text-slate-500" /></button>; })}</div></div></Panel>
     </>}
   </div>;
 }
@@ -214,26 +245,35 @@ function toSurfacePoints(points: MapPoint[], coordinateMode: CoordinateMode, sel
   });
 }
 
-function ComparisonView({ matchA, matchB, pointsA, pointsB, coordinateMode, period, momentTypes, submomentTypes }: { matchA?: MatchSummary; matchB?: MatchSummary; pointsA: MapPoint[]; pointsB: MapPoint[]; coordinateMode: CoordinateMode; period: MapPeriod; momentTypes: MomentTypeRecord[]; submomentTypes: SubMomentTypeRecord[] }) {
+function momentToPlaybackPoint(moment: MapMoment): MapPoint {
+  return { id: `moment:${moment.id}`, matchId: moment.matchId, matchTitle: moment.matchTitle, momentId: moment.id, momentTypeId: moment.momentTypeId, momentTypeName: moment.momentTypeName, momentStartTimeSeconds: moment.startTimeSeconds, momentEndTimeSeconds: moment.endTimeSeconds, subMomentTypeId: "", subMomentTypeName: "Full moment", color: moment.color, timeSeconds: moment.startTimeSeconds, fieldX: null, fieldY: null, goalX: null, goalY: null, outcome: moment.outcome, period: moment.period, attackDirection: moment.attackDirection };
+}
+
+function hasCoordinates(point: MapPoint) {
+  return (point.fieldX !== null && point.fieldY !== null) || (point.goalX !== null && point.goalY !== null);
+}
+
+function ComparisonView({ matchA, matchB, pointsA, pointsB, momentsA, momentsB, coordinateMode, period, momentTypes, submomentTypes }: { matchA?: MatchSummary; matchB?: MatchSummary; pointsA: MapPoint[]; pointsB: MapPoint[]; momentsA: MapMoment[]; momentsB: MapMoment[]; coordinateMode: CoordinateMode; period: MapPeriod; momentTypes: MomentTypeRecord[]; submomentTypes: SubMomentTypeRecord[] }) {
   if (!matchA || !matchB) return <Panel className="p-10 text-center text-sm text-slate-500"><ArrowRightLeft className="mx-auto mb-3" />Select two different games to compare them.</Panel>;
   return <div className="space-y-5">
-    <div className="grid gap-5 xl:grid-cols-2"><ComparisonMap match={matchA} points={pointsA} coordinateMode={coordinateMode} /><ComparisonMap match={matchB} points={pointsB} coordinateMode={coordinateMode} /></div>
-    <ComparisonChart matchA={matchA} matchB={matchB} pointsA={pointsA} pointsB={pointsB} period={period} momentTypes={momentTypes} submomentTypes={submomentTypes} />
+    <div className="grid gap-5 xl:grid-cols-2"><ComparisonMap match={matchA} points={pointsA} moments={momentsA} coordinateMode={coordinateMode} /><ComparisonMap match={matchB} points={pointsB} moments={momentsB} coordinateMode={coordinateMode} /></div>
+    <ComparisonChart matchA={matchA} matchB={matchB} pointsA={pointsA} pointsB={pointsB} momentsA={momentsA} momentsB={momentsB} period={period} momentTypes={momentTypes} submomentTypes={submomentTypes} />
   </div>;
 }
 
-function ComparisonMap({ match, points, coordinateMode }: { match: MatchSummary; points: MapPoint[]; coordinateMode: CoordinateMode }) {
-  return <Panel className="p-4"><div className="flex items-start justify-between gap-3"><div><Label>{match.title}</Label><p className="mt-1 text-xs text-slate-500">{points.length} occurrences · {coordinateMode === "normalized" ? "Attack →" : "Original coordinates"}</p></div><Badge>{points.length}</Badge></div><PitchSurface className="mt-4" points={toSurfacePoints(points, coordinateMode, null, "field")} /><div className="mt-4 grid grid-cols-[minmax(0,1fr)_12rem] gap-3"><div className="flex flex-wrap content-start gap-2">{summarize(points).map((item) => <Badge key={item.label} className={item.tone}>{item.label}: {item.value}</Badge>)}</div><GoalSurface points={toSurfacePoints(points, coordinateMode, null, "goal")} /></div></Panel>;
+function ComparisonMap({ match, points, moments, coordinateMode }: { match: MatchSummary; points: MapPoint[]; moments: MapMoment[]; coordinateMode: CoordinateMode }) {
+  const mappedCount = points.filter(hasCoordinates).length;
+  return <Panel className="p-4"><div className="flex items-start justify-between gap-3"><div><Label>{match.title}</Label><p className="mt-1 text-xs text-slate-500">{moments.length} moments · {mappedCount} mapped · {coordinateMode === "normalized" ? "Attack →" : "Original coordinates"}</p></div><Badge>{moments.length}</Badge></div><PitchSurface className="mt-4" points={toSurfacePoints(points, coordinateMode, null, "field")} /><div className="mt-4 grid grid-cols-[minmax(0,1fr)_12rem] gap-3"><div className="flex flex-wrap content-start gap-2">{summarize(moments).map((item) => <Badge key={item.label} className={item.tone}>{item.label}: {item.value}</Badge>)}</div><GoalSurface points={toSurfacePoints(points, coordinateMode, null, "goal")} /></div></Panel>;
 }
 
-function ComparisonChart({ matchA, matchB, pointsA, pointsB, period, momentTypes, submomentTypes }: { matchA: MatchSummary; matchB: MatchSummary; pointsA: MapPoint[]; pointsB: MapPoint[]; period: MapPeriod; momentTypes: MomentTypeRecord[]; submomentTypes: SubMomentTypeRecord[] }) {
-  const momentRows = momentTypes.map((type) => ({ id: type.id, name: type.name, color: type.color, a: new Set(pointsA.filter((point) => point.momentTypeId === type.id).map((point) => point.momentId)).size, b: new Set(pointsB.filter((point) => point.momentTypeId === type.id).map((point) => point.momentId)).size })).filter((row) => row.a || row.b);
+function ComparisonChart({ matchA, matchB, pointsA, pointsB, momentsA, momentsB, period, momentTypes, submomentTypes }: { matchA: MatchSummary; matchB: MatchSummary; pointsA: MapPoint[]; pointsB: MapPoint[]; momentsA: MapMoment[]; momentsB: MapMoment[]; period: MapPeriod; momentTypes: MomentTypeRecord[]; submomentTypes: SubMomentTypeRecord[] }) {
+  const momentRows = momentTypes.map((type) => ({ id: type.id, name: type.name, color: type.color, a: momentsA.filter((moment) => moment.momentTypeId === type.id).length, b: momentsB.filter((moment) => moment.momentTypeId === type.id).length })).filter((row) => row.a || row.b);
   const submomentRows = submomentTypes.map((type) => ({ id: type.id, name: type.name, color: type.color, a: pointsA.filter((point) => point.subMomentTypeId === type.id).length, b: pointsB.filter((point) => point.subMomentTypeId === type.id).length })).filter((row) => row.a || row.b);
   const minutesA = analyzedMinutes(matchA, period);
   const minutesB = analyzedMinutes(matchB, period);
   return <Panel className="overflow-hidden"><div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 p-4"><div><div className="flex items-center gap-2"><BarChart3 size={17} className="text-leaf-400"/><Label>Game comparison</Label></div><p className="mt-1 text-xs text-slate-500">Counts, outcomes and rate per 90 analysed minutes.</p></div><div className="flex gap-3 text-[10px]"><span className="text-cyan-300">● {matchA.title}</span><span className="text-amber-300">● {matchB.title}</span></div></div>
-    <div className="grid gap-3 border-b border-white/10 p-4 sm:grid-cols-2 lg:grid-cols-4"><Stat label="Game A occurrences" value={pointsA.length} detail={rateLabel(pointsA.length, minutesA)} /><Stat label="Game B occurrences" value={pointsB.length} detail={rateLabel(pointsB.length, minutesB)} /><Stat label="Game A success" value={successRate(pointsA)} detail={outcomeDetail(pointsA)} /><Stat label="Game B success" value={successRate(pointsB)} detail={outcomeDetail(pointsB)} /></div>
-    <div className="grid gap-px bg-white/[.06] lg:grid-cols-2"><ComparisonBars title="Mapped moments" rows={momentRows} /><ComparisonBars title="Submoments" rows={submomentRows} /></div>
+    <div className="grid gap-3 border-b border-white/10 p-4 sm:grid-cols-2 lg:grid-cols-4"><Stat label="Game A moments" value={momentsA.length} detail={rateLabel(momentsA.length, minutesA)} /><Stat label="Game B moments" value={momentsB.length} detail={rateLabel(momentsB.length, minutesB)} /><Stat label="Game A success" value={successRate(momentsA)} detail={outcomeDetail(momentsA)} /><Stat label="Game B success" value={successRate(momentsB)} detail={outcomeDetail(momentsB)} /></div>
+    <div className="grid gap-px bg-white/[.06] lg:grid-cols-2"><ComparisonBars title="Moments" rows={momentRows} /><ComparisonBars title="Submoments" rows={submomentRows} /></div>
   </Panel>;
 }
 
@@ -242,9 +282,9 @@ function ComparisonBars({ title, rows }: { title: string; rows: { id: string; na
   return <div className="bg-pitch-900"><div className="border-b border-white/[.06] px-3 py-2"><Label>{title}</Label></div><div className="divide-y divide-white/[.06]">{rows.length ? rows.map(({ id, name, color, a, b }) => <div key={id} className="grid items-center gap-3 p-3 sm:grid-cols-[10rem_minmax(0,1fr)_3rem_3rem]"><div className="flex items-center gap-2 text-xs text-slate-200"><span className="h-3 w-3 shrink-0 rounded-full" style={{ backgroundColor: color }}/><span className="truncate">{name}</span></div><div className="grid gap-1"><div className="h-2 rounded-full bg-white/[.05]"><div className="h-full rounded-full bg-cyan-300" style={{ width: `${a / maximum * 100}%` }}/></div><div className="h-2 rounded-full bg-white/[.05]"><div className="h-full rounded-full bg-amber-300" style={{ width: `${b / maximum * 100}%` }}/></div></div><strong className="text-right text-xs text-cyan-200">{a}</strong><strong className="text-right text-xs text-amber-200">{b}</strong></div>) : <p className="p-8 text-center text-sm text-slate-500">No occurrences match these filters.</p>}</div></div>;
 }
 
-function summarize(points: MapPoint[]) { const positive = points.filter((point) => point.outcome === "positive").length; const negative = points.filter((point) => point.outcome === "negative").length; return [{ label: "Positive", value: positive, tone: "text-emerald-200" }, { label: "Negative", value: negative, tone: "text-red-200" }, { label: "Unrated", value: points.length - positive - negative, tone: "text-slate-300" }]; }
-function successRate(points: MapPoint[]) { const rated = points.filter((point) => point.outcome === "positive" || point.outcome === "negative"); if (!rated.length) return "—"; return `${Math.round(rated.filter((point) => point.outcome === "positive").length / rated.length * 100)}%`; }
-function outcomeDetail(points: MapPoint[]) { const summary = summarize(points); return `${summary[0].value} positive · ${summary[1].value} negative`; }
+function summarize(items: { outcome: string | null }[]) { const positive = items.filter((item) => item.outcome === "positive").length; const negative = items.filter((item) => item.outcome === "negative").length; return [{ label: "Positive", value: positive, tone: "text-emerald-200" }, { label: "Negative", value: negative, tone: "text-red-200" }, { label: "Unrated", value: items.length - positive - negative, tone: "text-slate-300" }]; }
+function successRate(items: { outcome: string | null }[]) { const rated = items.filter((item) => item.outcome === "positive" || item.outcome === "negative"); if (!rated.length) return "—"; return `${Math.round(rated.filter((item) => item.outcome === "positive").length / rated.length * 100)}%`; }
+function outcomeDetail(items: { outcome: string | null }[]) { const summary = summarize(items); return `${summary[0].value} positive · ${summary[1].value} negative`; }
 function analyzedMinutes(match: MatchSummary, period: MapPeriod) { const first = Math.max(0, (match.firstHalfEndSeconds || 0) - (match.firstHalfStartSeconds || 0)); const second = Math.max(0, (match.secondHalfEndSeconds || 0) - (match.secondHalfStartSeconds || 0)); return (period === "first_half" ? first : period === "second_half" ? second : first + second) / 60; }
 function rateLabel(count: number, minutes: number) { return minutes > 0 ? `${(count / minutes * 90).toFixed(1)} per 90 min` : "Set period markers for /90"; }
 function Stat({ label, value, detail }: { label: string; value: string | number; detail: string }) { return <div className="rounded-lg border border-white/10 bg-white/[.025] p-3"><p className="text-xl font-bold text-white">{value}</p><p className="text-xs text-slate-300">{label}</p><p className="mt-1 text-[10px] text-slate-500">{detail}</p></div>; }

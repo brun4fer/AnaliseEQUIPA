@@ -369,6 +369,32 @@ export async function getMapPoints() {
   });
 }
 
+export async function getMapMoments() {
+  const { workspace } = await requireWorkspace();
+  const rows = await prisma.moment.findMany({
+    where: { match: { workspaceId: workspace.id } },
+    include: { momentType: true, match: true, subMoments: { select: { subMomentTypeId: true } } },
+    orderBy: { startTimeSeconds: "asc" }
+  });
+  return rows.map((moment) => {
+    const period = getMatchPeriodAtTime(moment.match, moment.startTimeSeconds);
+    return {
+      id: moment.id,
+      matchId: moment.matchId,
+      matchTitle: moment.match.title,
+      momentTypeId: moment.momentTypeId,
+      momentTypeName: moment.momentType.name,
+      color: moment.momentType.color,
+      startTimeSeconds: moment.startTimeSeconds,
+      endTimeSeconds: moment.endTimeSeconds,
+      outcome: moment.outcome,
+      period,
+      attackDirection: getAttackDirectionAtTime(moment.match, moment.startTimeSeconds),
+      subMomentTypeIds: [...new Set(moment.subMoments.map((submoment) => submoment.subMomentTypeId))]
+    };
+  });
+}
+
 export async function saveMomentType(input: Record<string, unknown>, id?: string) {
   const { workspace } = await requireWorkspace();
   const allowedSubmomentIds = Array.isArray(input.allowedSubmomentIds) ? [...new Set(input.allowedSubmomentIds.map(String))] : [];
