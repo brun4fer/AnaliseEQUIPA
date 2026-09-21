@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { getAttackDirectionAtTime, getMatchPeriodAtTime } from "./match-periods";
+import { getAttackDirectionAtTime, getMatchPeriodAtTime, normalizeFieldX } from "./match-periods";
 
 const match = {
   firstHalfStartSeconds: 10,
@@ -19,10 +19,17 @@ test("only assigns a period inside a complete marked range", () => {
   assert.equal(getMatchPeriodAtTime({ ...match, secondHalfEndSeconds: null }, 4000), null);
 });
 
-test("uses the fixed attack direction for each identified half", () => {
+test("uses the configured attack direction for each identified half", () => {
   assert.equal(getAttackDirectionAtTime(match, 500), "left_to_right");
   assert.equal(getAttackDirectionAtTime(match, 4000), "right_to_left");
   assert.equal(getAttackDirectionAtTime(match, 2800), null);
   const legacyDirections = { ...match, firstHalfAttackDirection: "right_to_left", secondHalfAttackDirection: "left_to_right" };
-  assert.equal(getAttackDirectionAtTime(legacyDirections, 500), "left_to_right");
+  assert.equal(getAttackDirectionAtTime(legacyDirections, 500), "right_to_left");
+  assert.equal(getAttackDirectionAtTime(legacyDirections, 4000), "left_to_right");
+});
+
+test("normalizes opposing attack directions to the same side", () => {
+  assert.equal(normalizeFieldX(80, "left_to_right"), 80);
+  assert.equal(normalizeFieldX(20, "right_to_left"), 80);
+  assert.equal(normalizeFieldX(35, null), 35);
 });

@@ -6,6 +6,8 @@ type MatchPeriodSettings = {
   firstHalfEndSeconds?: number | null;
   secondHalfStartSeconds?: number | null;
   secondHalfEndSeconds?: number | null;
+  firstHalfAttackDirection?: string | null;
+  secondHalfAttackDirection?: string | null;
 };
 
 export function getMatchPeriodAtTime(match: MatchPeriodSettings, seconds: number): MatchPeriod | null {
@@ -27,7 +29,18 @@ export function getMatchPeriodAtTime(match: MatchPeriodSettings, seconds: number
 export function getAttackDirectionAtTime(match: MatchPeriodSettings, seconds: number): AttackDirection | null {
   const period = getMatchPeriodAtTime(match, seconds);
   if (!period) return null;
+  const configured = period === "second_half" ? match.secondHalfAttackDirection : match.firstHalfAttackDirection;
+  if (configured === "left_to_right" || configured === "right_to_left") return configured;
   return period === "second_half" ? "right_to_left" : "left_to_right";
+}
+
+export function attackDirectionLabel(direction: AttackDirection | null) {
+  if (!direction) return "Direction unassigned";
+  return direction === "right_to_left" ? "Attack ←" : "Attack →";
+}
+
+export function normalizeFieldX(x: number, direction: AttackDirection | null) {
+  return direction === "right_to_left" ? 100 - x : x;
 }
 
 export function matchPeriodLabel(period: MatchPeriod | null) {

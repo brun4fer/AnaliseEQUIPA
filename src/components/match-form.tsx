@@ -11,7 +11,7 @@ import { apiFetch } from "@/lib/http";
 
 export function MatchForm() {
   const router = useRouter();
-  const [form, setForm] = useState({ seasonId: "", competitionId: "", opponentClubId: "", roundName: "", matchDate: "", venue: "", notes: "" });
+  const [form, setForm] = useState({ seasonId: "", competitionId: "", opponentClubId: "", roundName: "", matchDate: "", venue: "", notes: "", firstHalfAttackDirection: "left_to_right", secondHalfAttackDirection: "right_to_left" });
   const [seasons, setSeasons] = useState<MaintenanceRecord[]>([]);
   const [competitions, setCompetitions] = useState<MaintenanceRecord[]>([]);
   const [clubs, setClubs] = useState<MaintenanceRecord[]>([]);
@@ -58,6 +58,8 @@ export function MatchForm() {
       <Field label="Round"><Input value={form.roundName} onChange={(event) => update("roundName", event.target.value)} /></Field>
       <Field label="Date"><Input type="date" value={form.matchDate} onChange={(event) => update("matchDate", event.target.value)} /></Field>
       <Field label="Venue"><Input value={form.venue} onChange={(event) => update("venue", event.target.value)} /></Field>
+      <Field label="1st-half attack direction"><Select value={form.firstHalfAttackDirection} onChange={(event) => setForm((current) => ({ ...current, firstHalfAttackDirection: event.target.value, secondHalfAttackDirection: event.target.value === "left_to_right" ? "right_to_left" : "left_to_right" }))}><option value="left_to_right">Attack →</option><option value="right_to_left">← Attack</option></Select></Field>
+      <Field label="2nd-half attack direction"><Select value={form.secondHalfAttackDirection} onChange={(event) => update("secondHalfAttackDirection", event.target.value)}><option value="left_to_right">Attack →</option><option value="right_to_left">← Attack</option></Select></Field>
       <Field label="Notes" className="md:col-span-2"><TextArea value={form.notes} onChange={(event) => update("notes", event.target.value)} /></Field>
       <div className="flex justify-end gap-2 md:col-span-2"><Link href="/"><Button type="button">Cancel</Button></Link><Button variant="primary" disabled={saving || !form.seasonId || !form.competitionId || !form.opponentClubId}><Save size={16} />{saving ? "Saving…" : "Create match"}</Button></div>
     </form>}</Panel>

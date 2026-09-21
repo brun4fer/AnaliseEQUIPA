@@ -6,6 +6,7 @@ import { Crosshair, Keyboard, Loader2, Pencil, Plus, Save, Target, Trash2, X } f
 import { Badge, Button, Input, Label, Panel } from "@/components/ui";
 import { ManagementPasswordPanel } from "@/components/management-password-panel";
 import { MediaLibraryLinkPanel } from "@/components/media-library-link-panel";
+import { TeamManagementPanel } from "@/components/team-management-panel";
 import type { MomentTypeRecord, SettingsPayload, SubMomentTypeRecord } from "@/lib/domain";
 import { apiFetch } from "@/lib/http";
 import { areaPasswordsEnabled } from "@/lib/access-areas";
@@ -174,6 +175,8 @@ export function SettingsClient() {
       ) : null}
 
       {areaPasswordsEnabled ? <ManagementPasswordPanel /> : null}
+
+      <TeamManagementPanel />
 
       <MediaLibraryLinkPanel />
 

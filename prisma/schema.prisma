@@ -27,6 +27,7 @@ model User {
   updatedAt          DateTime @updatedAt
 
   workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+  memberships WorkspaceMembership[]
   presences WorkspacePresence[]
 
   @@index([workspaceId])
@@ -59,6 +60,7 @@ model Workspace {
   updatedAt                 DateTime @updatedAt
 
   users          User[]
+  memberships    WorkspaceMembership[]
   seasons        Season[]
   clubs          Club[]
   competitions   Competition[]
@@ -66,6 +68,19 @@ model Workspace {
   momentTypes    MomentType[]
   subMomentTypes SubMomentType[]
   presences      WorkspacePresence[]
+}
+
+model WorkspaceMembership {
+  id          String   @id @default(cuid())
+  workspaceId String
+  userId      String
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId])
+  @@index([userId])
 }
 
 model WorkspacePresence {

@@ -76,6 +76,12 @@ export type MatchSummary = {
   competitionId?: string | null;
   video?: VideoRecord | null;
   momentCount: number;
+  firstHalfStartSeconds?: number | null;
+  firstHalfEndSeconds?: number | null;
+  secondHalfStartSeconds?: number | null;
+  secondHalfEndSeconds?: number | null;
+  firstHalfAttackDirection?: "left_to_right" | "right_to_left";
+  secondHalfAttackDirection?: "left_to_right" | "right_to_left";
 };
 
 export type MatchDetail = MatchSummary & {
@@ -101,6 +107,8 @@ export type AccountPayload = {
   name: string;
   username: string;
   teamName: string | null;
+  activeWorkspaceId: string | null;
+  teams: { id: string; name: string }[];
   needsOnboarding: boolean;
   accessControl: { globalUnlocked: boolean; unlockedAreas: import("@/lib/access-areas").AccessArea[] };
 };

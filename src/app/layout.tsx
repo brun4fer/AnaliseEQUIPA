@@ -5,7 +5,7 @@ import { PwaRegistrar } from "@/components/pwa-registrar";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Team Analysis",
+  title: "AP - our team performance",
   description: "Moments, submoments, video and occurrence maps.",
   manifest: "/manifest.webmanifest"
 };

@@ -45,6 +45,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [pendingArea, setPendingArea] = useState<AccessArea | null>(null);
   const [presence, setPresence] = useState<Presence | null>(null);
   const [presenceAcknowledged, setPresenceAcknowledged] = useState(false);
+  const [switchingTeam, setSwitchingTeam] = useState(false);
   const isPublic = PUBLIC_PATHS.includes(pathname);
   const currentArea = accessAreaForPath(pathname);
 
@@ -103,19 +104,28 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     window.location.href = "/login";
   }
 
+  async function switchTeam(workspaceId: string) {
+    if (!account || workspaceId === account.activeWorkspaceId) return;
+    setSwitchingTeam(true);
+    try {
+      await apiFetch("/api/account/team", { method: "PUT", body: JSON.stringify({ workspaceId }) });
+      window.location.href = "/";
+    } catch {
+      setSwitchingTeam(false);
+    }
+  }
+
   return (
     <div className="min-h-screen">
       <header className="sticky top-0 z-40 border-b border-white/10 bg-pitch-950/90 backdrop-blur-xl">
         <div className="mx-auto flex max-w-[1800px] items-center justify-between gap-2 px-2 py-2 sm:gap-4 sm:px-4">
-          <Link href="/" className="flex min-w-0 shrink-0 items-center gap-3">
-            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-cyan-300/30 bg-cyan-300/10 text-cyan-200 shadow-glow">
-              <Goal size={22} strokeWidth={2.2} />
-            </span>
-            <span className="min-w-0">
-              <span className="block truncate text-sm font-semibold text-cyan-100">{(account?.teamName || "TEAM").toUpperCase()} · ANALYSIS</span>
-              <span className="block truncate text-xs text-slate-400">Team, video and maps</span>
-            </span>
-          </Link>
+          <div className="flex min-w-0 shrink-0 items-center gap-2">
+            <Link href="/" className="flex min-w-0 shrink-0 items-center gap-3">
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-cyan-300/30 bg-cyan-300/10 text-cyan-200 shadow-glow"><Goal size={22} strokeWidth={2.2} /></span>
+              <span className="hidden min-w-0 sm:block"><span className="block truncate text-sm font-semibold text-cyan-100">AP - OUR TEAM PERFORMANCE</span><span className="block truncate text-xs text-slate-400">{account?.teamName || "Team, video and maps"}</span></span>
+            </Link>
+            {account && account.teams.length > 1 ? <select aria-label="Active team" disabled={switchingTeam} value={account.activeWorkspaceId || ""} onChange={(event) => void switchTeam(event.target.value)} className="h-9 max-w-36 rounded-md border border-white/10 bg-pitch-900 px-2 text-xs text-slate-200 outline-none focus:border-cyan-300/50 lg:max-w-52">{account.teams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}</select> : null}
+          </div>
 
           <div className="flex min-w-0 items-center gap-2">
             <nav className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto rounded-lg border border-white/10 bg-white/[.03] p-1 sm:flex-none">

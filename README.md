@@ -1,6 +1,6 @@
-# Feirense Team Analysis
+# AP - our team performance
 
-Web application for Feirense team analysis. It identifies video moments and submoments, records pitch and goal locations, compares identified match periods, and stores source videos privately in Cloudflare R2.
+Web application for own-team performance analysis. It identifies video moments and submoments, records pitch and goal locations, compares identified match periods, and stores source videos privately in Cloudflare R2.
 
 ## Local setup
 

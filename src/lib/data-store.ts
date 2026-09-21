@@ -52,7 +52,13 @@ export async function listMatches() {
     opponentClubId: match.opponentClubId,
     competitionId: match.competitionId,
     video: match.video ? serializeVideo(match.video) : null,
-    momentCount: match._count.moments
+    momentCount: match._count.moments,
+    firstHalfStartSeconds: match.firstHalfStartSeconds,
+    firstHalfEndSeconds: match.firstHalfEndSeconds,
+    secondHalfStartSeconds: match.secondHalfStartSeconds,
+    secondHalfEndSeconds: match.secondHalfEndSeconds,
+    firstHalfAttackDirection: match.firstHalfAttackDirection,
+    secondHalfAttackDirection: match.secondHalfAttackDirection
   }));
 }
 
@@ -89,8 +95,8 @@ export async function createMatch(input: Record<string, unknown>) {
       venue: optionalString(input.venue),
       notes: optionalString(input.notes),
       matchDate: input.matchDate ? new Date(String(input.matchDate)) : null,
-      firstHalfAttackDirection: "left_to_right",
-      secondHalfAttackDirection: "right_to_left"
+      firstHalfAttackDirection: attackDirection(input.firstHalfAttackDirection, "left_to_right"),
+      secondHalfAttackDirection: attackDirection(input.secondHalfAttackDirection, "right_to_left")
     },
     include: matchInclude
   });
@@ -136,8 +142,8 @@ export async function updateMatch(matchId: string, input: Record<string, unknown
   if (input.venue !== undefined) updateData.venue = optionalString(input.venue);
   if (input.notes !== undefined) updateData.notes = optionalString(input.notes);
   if (input.matchDate !== undefined) updateData.matchDate = input.matchDate ? validDate(input.matchDate) : null;
-  updateData.firstHalfAttackDirection = "left_to_right";
-  updateData.secondHalfAttackDirection = "right_to_left";
+  if (input.firstHalfAttackDirection !== undefined) updateData.firstHalfAttackDirection = attackDirection(input.firstHalfAttackDirection, current.firstHalfAttackDirection);
+  if (input.secondHalfAttackDirection !== undefined) updateData.secondHalfAttackDirection = attackDirection(input.secondHalfAttackDirection, current.secondHalfAttackDirection);
 
   const match = await prisma.$transaction(async (tx) => {
     await tx.match.update({ where: { id: matchId }, data: updateData });
@@ -356,7 +362,7 @@ export async function getMapPoints() {
     fieldY: point.fieldY,
     goalX: point.goalX,
     goalY: point.goalY,
-      outcome: point.outcome,
+      outcome: point.outcome ?? point.moment.outcome,
       period,
       attackDirection: getAttackDirectionAtTime(point.moment.match, eventTime)
     };
@@ -443,6 +449,12 @@ export async function deleteSubMoment(id: string) {
   const { workspace } = await requireWorkspace();
   await prisma.subMoment.findFirstOrThrow({ where: { id, moment: { match: { workspaceId: workspace.id } } }, select: { id: true } });
   return prisma.subMoment.delete({ where: { id } });
+}
+
+function attackDirection(value: unknown, fallback: string) {
+  const direction = String(value || fallback);
+  if (direction !== "left_to_right" && direction !== "right_to_left") throw new Error("Select a valid attack direction.");
+  return direction;
 }
 
 function optionalString(value: unknown) {

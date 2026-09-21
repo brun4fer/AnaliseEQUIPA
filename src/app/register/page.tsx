@@ -41,7 +41,7 @@ export default function RegisterPage() {
   return <div className="flex min-h-screen items-center justify-center px-4 py-8">
     <Panel className="w-full max-w-md p-7">
       <span className="flex h-12 w-12 items-center justify-center rounded-lg bg-cyan-300/10 text-cyan-200"><UserPlus /></span>
-      <p className="mt-5 text-xs font-medium uppercase tracking-[.24em] text-cyan-200/80">Team Analysis</p>
+      <p className="mt-5 text-xs font-medium uppercase tracking-[.24em] text-cyan-200/80">AP - our team performance</p>
       <h1 className="mt-2 text-2xl font-semibold text-white">Create your account</h1>
       <p className="mt-2 text-sm leading-6 text-slate-400">Create a private account for your team. After registration, you will choose the team name and configure the management password.</p>
 
