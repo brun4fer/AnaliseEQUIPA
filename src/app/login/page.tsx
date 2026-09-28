@@ -1,18 +1,33 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { LockKeyhole } from "lucide-react";
 
 import { Button, Input, Label, Panel } from "@/components/ui";
+
+const ssoMessages: Record<string, string> = {
+  unavailable: "Single sign-on is not configured yet. Use the local login below.",
+  invalid: "The single sign-on request was invalid. Please try again from the portal.",
+  expired: "The single sign-on code expired or was already used. Please try again.",
+  unlinked: "This portal account is not linked to an existing account in this application.",
+  failed: "The portal could not be reached. Use the local login or try again shortly."
+};
 
 export default function LoginPage() {
   const router = useRouter();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [ssoError, setSsoError] = useState("");
   const [busy, setBusy] = useState(false);
+  const ssoEnabled = process.env.NEXT_PUBLIC_SSO_ENABLED === "true";
+
+  useEffect(() => {
+    const reason = new URLSearchParams(window.location.search).get("sso");
+    setSsoError(reason ? ssoMessages[reason] || "Single sign-on could not be completed." : "");
+  }, []);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -30,7 +45,12 @@ export default function LoginPage() {
     <span className="flex h-12 w-12 items-center justify-center rounded-lg bg-cyan-300/10 text-cyan-200"><LockKeyhole /></span>
     <h1 className="mt-5 text-2xl font-semibold text-white">AP - our team performance</h1>
     <p className="mt-2 text-sm text-slate-400">Sign in to access your team&apos;s private matches, videos and analysis data.</p>
+    {ssoError ? <div className="mt-5 rounded-lg border border-amber-400/25 bg-amber-500/10 p-3 text-sm text-amber-100">{ssoError}</div> : null}
     {error ? <div className="mt-5 rounded-lg border border-red-400/25 bg-red-500/10 p-3 text-sm text-red-100">{error}</div> : null}
+    {ssoEnabled ? <>
+      <Link href="/api/auth/sso/start" className="mt-6 flex h-11 items-center justify-center rounded-lg border border-cyan-300/30 bg-cyan-300/10 px-4 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-300/15">Sign in with AP Portal</Link>
+      <div className="my-5 flex items-center gap-3 text-xs uppercase tracking-[0.16em] text-slate-600"><span className="h-px flex-1 bg-slate-700/70"/><span>or local login</span><span className="h-px flex-1 bg-slate-700/70"/></div>
+    </> : null}
     <form onSubmit={submit} className="mt-6 grid gap-4">
       <label className="grid gap-2"><Label>Username</Label><Input type="text" autoCapitalize="none" autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} required /></label>
       <label className="grid gap-2"><Label>Password</Label><Input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} required /></label>
