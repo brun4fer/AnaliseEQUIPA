@@ -85,6 +85,17 @@ export type MatchSummary = {
 };
 
 export type MatchDetail = MatchSummary & {
+  scoreboardEnabled: boolean;
+  teamName: string | null;
+  homeClubName: string | null;
+  awayClubName: string | null;
+  homeClubShortName: string | null;
+  awayClubShortName: string | null;
+  homeClubLogoDataUrl: string | null;
+  awayClubLogoDataUrl: string | null;
+  homeTeamColor: string;
+  awayTeamColor: string;
+  scoreEvents: MatchScoreEventRecord[];
   venue: string | null;
   notes: string | null;
   firstHalfStartSeconds: number | null;
@@ -95,6 +106,18 @@ export type MatchDetail = MatchSummary & {
   secondHalfAttackDirection: string;
   video: VideoRecord | null;
   moments: MomentRecord[];
+};
+
+export type MatchScoreEventRecord = {
+  id: string;
+  matchId: string;
+  timeSeconds: number;
+  homeScore: number;
+  awayScore: number;
+  homeRedCards: number;
+  awayRedCards: number;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type SettingsPayload = {

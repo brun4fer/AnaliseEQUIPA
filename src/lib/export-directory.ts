@@ -1,5 +1,12 @@
 export type ExportDirectory = FileSystemDirectoryHandle;
 
+export async function pickExportVideoFile(suggestedName: string): Promise<FileSystemWritableFileStream | null> {
+  const picker = (window as Window & { showSaveFilePicker?: (options: { suggestedName: string; types: { description: string; accept: Record<string, string[]> }[] }) => Promise<FileSystemFileHandle> }).showSaveFilePicker;
+  if (!picker) return null;
+  const handle = await picker.call(window, { suggestedName, types: [{ description: "MP4 video", accept: { "video/mp4": [".mp4"] } }] });
+  return handle.createWritable();
+}
+
 type DirectoryPickerWindow = Window & {
   showDirectoryPicker?: (options?: { mode?: "read" | "readwrite" }) => Promise<FileSystemDirectoryHandle>;
 };

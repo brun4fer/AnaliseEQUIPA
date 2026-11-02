@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { OutcomeButtons } from "@/components/outcome-buttons";
 import { X } from "lucide-react";
 
 import { Button, Label, Panel, Select, TextArea } from "@/components/ui";
@@ -11,13 +12,14 @@ export function MomentEditDialog({ moment, momentTypes, duration, onSave, onClos
   moment: MomentRecord;
   momentTypes: MomentTypeRecord[];
   duration: number;
-  onSave: (input: { momentTypeId: string; startTimeSeconds: number; endTimeSeconds: number; notes: string | null }) => Promise<void>;
+  onSave: (input: { momentTypeId: string; startTimeSeconds: number; endTimeSeconds: number; notes: string | null; outcome: "positive" | "negative" | null }) => Promise<void>;
   onClose: () => void;
 }) {
   const [momentTypeId, setMomentTypeId] = useState(moment.momentTypeId);
   const [start, setStart] = useState(moment.startTimeSeconds);
   const [end, setEnd] = useState(moment.endTimeSeconds);
   const [notes, setNotes] = useState(moment.notes || "");
+  const [outcome, setOutcome] = useState<"positive" | "negative" | null>(moment.outcome === "positive" || moment.outcome === "negative" ? moment.outcome : null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -36,7 +38,7 @@ export function MomentEditDialog({ moment, momentTypes, duration, onSave, onClos
       return;
     }
     setSaving(true); setError(null);
-    try { await onSave({ momentTypeId, startTimeSeconds: start, endTimeSeconds: end, notes: notes.trim() || null }); }
+    try { await onSave({ momentTypeId, startTimeSeconds: start, endTimeSeconds: end, notes: notes.trim() || null, outcome }); }
     catch (caught) { setError(caught instanceof Error ? caught.message : "Could not save the changes."); }
     finally { setSaving(false); }
   }
@@ -49,6 +51,7 @@ export function MomentEditDialog({ moment, momentTypes, duration, onSave, onClos
         <div className="grid gap-3 sm:grid-cols-2"><TimeAdjuster label="Start" value={start} onMinus={() => adjustStart(-1)} onPlus={() => adjustStart(1)} /><TimeAdjuster label="End" value={end} onMinus={() => adjustEnd(-1)} onPlus={() => adjustEnd(1)} /></div>
         <div className="rounded-lg border border-white/10 bg-black/15 px-3 py-2 text-center font-mono text-sm text-cyan-100" aria-label="Clip preview interval">Preview: {formatTime(start)} – {formatTime(end)}</div>
         <label className="grid gap-2"><Label>Notes</Label><TextArea className="min-h-20" value={notes} onChange={(event) => setNotes(event.target.value)} /></label>
+        <div className="flex items-center justify-between"><Label>Result classification</Label><OutcomeButtons value={outcome} onChange={(next) => setOutcome((current) => current === next ? null : next)}/></div>
         {error ? <p className="rounded-lg border border-red-400/25 bg-red-500/10 p-3 text-sm text-red-100">{error}</p> : null}
         <div className="flex justify-end gap-2"><Button type="button" onClick={onClose}>Cancel</Button><Button type="submit" variant="primary" disabled={saving}>{saving ? "Saving…" : "Save changes"}</Button></div>
       </form>

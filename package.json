@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit",
     "test": "tsx --test src/lib/*.test.ts",
     "prisma:generate": "node ./node_modules/prisma/build/index.js generate",
+    "prisma:deploy": "node ./node_modules/prisma/build/index.js migrate deploy",
     "media:generate": "node ./node_modules/prisma/build/index.js generate --schema prisma-media/schema.prisma",
     "media:push": "node ./node_modules/prisma/build/index.js db push --schema prisma-media/schema.prisma",
     "prisma:push": "node ./node_modules/prisma/build/index.js db push",

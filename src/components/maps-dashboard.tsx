@@ -3,8 +3,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowRightLeft, BarChart3, ChevronsRight, FileVideo, Filter, Loader2, MapPinned, Play, RotateCcw, Target, Upload } from "lucide-react";
 
+import { CompareGamesAnalysis } from "@/components/compare-games-analysis";
+import { useSoundPreference, VideoAudioToggle } from "@/components/video-audio-toggle";
 import { GoalSurface, PitchSurface } from "@/components/analysis-surfaces";
-import { Badge, Button, Label, Panel, Select } from "@/components/ui";
+import { Badge, Button, Input, Label, Panel, Select } from "@/components/ui";
 import { useVideoKeyboardSeek, VideoFullscreenButton } from "@/components/video-controls";
 import type { MapMoment, MapPoint, MatchSummary, MomentTypeRecord, SettingsPayload, SubMomentTypeRecord } from "@/lib/domain";
 import { apiFetch } from "@/lib/http";
@@ -16,6 +18,7 @@ import { formatTime } from "@/lib/time";
 type MapPeriod = "both" | "first_half" | "second_half";
 type CoordinateMode = "normalized" | "original";
 type ViewMode = "map" | "compare";
+type ComparisonScope = "two" | "all";
 
 export function MapsDashboard() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -34,8 +37,13 @@ export function MapsDashboard() {
   const [viewMode, setViewMode] = useState<ViewMode>("map");
   const [coordinateMode, setCoordinateMode] = useState<CoordinateMode>("normalized");
   const [matchId, setMatchId] = useState("unselected");
+  const [comparisonScope, setComparisonScope] = useState<ComparisonScope>("two");
   const [compareA, setCompareA] = useState("");
   const [compareB, setCompareB] = useState("");
+  const [comparisonSeason, setComparisonSeason] = useState("");
+  const [comparisonCompetition, setComparisonCompetition] = useState("");
+  const [comparisonFrom, setComparisonFrom] = useState("");
+  const [comparisonTo, setComparisonTo] = useState("");
   const [momentTypeId, setMomentTypeId] = useState("");
   const [submomentTypeId, setSubmomentTypeId] = useState("");
   const [period, setPeriod] = useState<MapPeriod>("both");
@@ -68,6 +76,18 @@ export function MapsDashboard() {
     const allowedIds = new Set(settings.momentTypes.find((type) => type.id === momentTypeId)?.allowedSubmoments?.map((type) => type.id) || []);
     return settings.subMomentTypes.filter((type) => allowedIds.has(type.id));
   }, [momentTypeId, settings]);
+
+  const eligibleComparisonMatches = useMemo(() => matches.filter((match) =>
+    (!comparisonSeason || match.season === comparisonSeason)
+    && (!comparisonCompetition || match.competition === comparisonCompetition)
+    && (!comparisonFrom || Boolean(match.matchDate && match.matchDate.slice(0, 10) >= comparisonFrom))
+    && (!comparisonTo || Boolean(match.matchDate && match.matchDate.slice(0, 10) <= comparisonTo))
+  ), [comparisonCompetition, comparisonFrom, comparisonSeason, comparisonTo, matches]);
+  const comparisonMatchIds = useMemo(() => {
+    if (comparisonScope === "all") return eligibleComparisonMatches.map((match) => match.id);
+    const eligibleIds = new Set(eligibleComparisonMatches.map((match) => match.id));
+    return compareA && compareB && compareA !== compareB && eligibleIds.has(compareA) && eligibleIds.has(compareB) ? [compareA, compareB] : [];
+  }, [compareA, compareB, comparisonScope, eligibleComparisonMatches]);
 
   function filterPoints(targetMatchId: string, includeAll = false) {
     if (!targetMatchId || targetMatchId === "unselected") return [];
@@ -200,18 +220,28 @@ export function MapsDashboard() {
 
   if (loading) return <div className="flex min-h-[60vh] items-center justify-center text-slate-400"><Loader2 className="mr-2 animate-spin" />Building maps…</div>;
   const hasMatchSelection = matchId !== "unselected";
-  const matchA = matches.find((match) => match.id === compareA);
-  const matchB = matches.find((match) => match.id === compareB);
+  const matchA = eligibleComparisonMatches.find((match) => match.id === compareA);
+  const matchB = eligibleComparisonMatches.find((match) => match.id === compareB);
 
   return <div className="space-y-5">
     <input ref={fileInputRef} type="file" accept="video/*" className="hidden" onChange={(event) => { void loadSelectedVideo(event.target.files?.[0]); event.currentTarget.value = ""; }} />
     <div className="flex flex-wrap items-end justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-[.22em] text-leaf-400">Spatial analysis</p><h1 className="mt-2 text-3xl font-bold text-white">Occurrence maps</h1><p className="mt-2 text-sm text-slate-400">Compare matches with every attack normalized to the right, without changing the original coordinates.</p></div><div className="flex overflow-hidden rounded-lg border border-white/10"><button className={`px-4 py-2 text-xs font-semibold ${viewMode === "map" ? "bg-cyan-300 text-ink-950" : "bg-white/[.04] text-slate-300"}`} onClick={() => setViewMode("map")}><MapPinned className="mr-2 inline" size={14}/>Map</button><button className={`px-4 py-2 text-xs font-semibold ${viewMode === "compare" ? "bg-cyan-300 text-ink-950" : "bg-white/[.04] text-slate-300"}`} onClick={() => { setViewMode("compare"); setCoordinateMode("normalized"); stopPlaylist(); }}><ArrowRightLeft className="mr-2 inline" size={14}/>Compare games</button></div></div>
     {error ? <Panel className="border-red-400/20 p-4 text-red-100">{error}</Panel> : null}
 
+    {viewMode === "compare" ? <Panel className="grid gap-4 p-4 sm:grid-cols-2 xl:grid-cols-5 xl:items-end">
+      <label className="grid gap-2"><Label>Comparison</Label><Select value={comparisonScope} onChange={(event) => setComparisonScope(event.target.value as ComparisonScope)}><option value="two">Two games</option><option value="all">All games</option></Select></label>
+      <label className="grid gap-2"><Label>Season</Label><Select value={comparisonSeason} onChange={(event) => setComparisonSeason(event.target.value)}><option value="">All seasons</option>{[...new Set(matches.map((match) => match.season).filter(Boolean))].map((value) => <option key={value} value={value!}>{value}</option>)}</Select></label>
+      <label className="grid gap-2"><Label>Competition</Label><Select value={comparisonCompetition} onChange={(event) => setComparisonCompetition(event.target.value)}><option value="">All competitions</option>{[...new Set(matches.map((match) => match.competition).filter(Boolean))].map((value) => <option key={value} value={value!}>{value}</option>)}</Select></label>
+      <label className="grid gap-2"><Label>From</Label><Input type="date" value={comparisonFrom} onChange={(event) => setComparisonFrom(event.target.value)}/></label>
+      <label className="grid gap-2"><Label>To</Label><Input type="date" value={comparisonTo} onChange={(event) => setComparisonTo(event.target.value)}/></label>
+    </Panel> : null}
+
     <Panel className={`grid gap-4 p-4 ${viewMode === "compare" ? "md:grid-cols-2 xl:grid-cols-6" : "grid-cols-2 xl:grid-cols-6"} xl:items-end`}>
       {viewMode === "map" ? <label className="grid gap-2"><Label>Match</Label><Select value={matchId} onChange={(event) => { stopPlaylist(); setMatchId(event.target.value); }}><option value="unselected" disabled>Select a match</option><option value="all">All matches</option>{matches.map((match) => <option key={match.id} value={match.id}>{match.title}</option>)}</Select></label> : <>
-        <label className="grid gap-2"><Label>Game A</Label><Select value={compareA} onChange={(event) => setCompareA(event.target.value)}><option value="">Select…</option>{matches.map((match) => <option key={match.id} value={match.id}>{match.title}</option>)}</Select></label>
-        <label className="grid gap-2"><Label>Game B</Label><Select value={compareB} onChange={(event) => setCompareB(event.target.value)}><option value="">Select…</option>{matches.filter((match) => match.id !== compareA).map((match) => <option key={match.id} value={match.id}>{match.title}</option>)}</Select></label>
+        {comparisonScope === "two" ? <>
+          <label className="grid gap-2"><Label>Game A</Label><Select value={eligibleComparisonMatches.some((match) => match.id === compareA) ? compareA : ""} onChange={(event) => setCompareA(event.target.value)}><option value="">Select…</option>{eligibleComparisonMatches.map((match) => <option key={match.id} value={match.id}>{match.title}</option>)}</Select></label>
+          <label className="grid gap-2"><Label>Game B</Label><Select value={eligibleComparisonMatches.some((match) => match.id === compareB) ? compareB : ""} onChange={(event) => setCompareB(event.target.value)}><option value="">Select…</option>{eligibleComparisonMatches.filter((match) => match.id !== compareA).map((match) => <option key={match.id} value={match.id}>{match.title}</option>)}</Select></label>
+        </> : <div className="flex min-h-10 items-center rounded-lg border border-cyan-300/20 bg-cyan-300/[.06] px-3 text-sm text-cyan-100 md:col-span-2">{eligibleComparisonMatches.length} games in the selected range</div>}
       </>}
       <label className="grid gap-2"><Label>Moment</Label><Select value={momentTypeId} onChange={(event) => changeMomentType(event.target.value)}><option value="">All moments</option>{settings?.momentTypes.map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}</Select></label>
       <label className="grid gap-2"><Label>Submoment</Label><Select value={submomentTypeId} onChange={(event) => { stopPlaylist(); setSubmomentTypeId(event.target.value); }}><option value="">All submoments</option>{availableSubmomentTypes.map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}</Select></label>
@@ -220,7 +250,10 @@ export function MapsDashboard() {
       {viewMode === "map" ? <div className="flex gap-2"><Badge className="h-10 flex-1 justify-center px-3" title={`${mappedOccurrenceCount} occurrences with coordinates`}><Filter size={14} className="mr-2" />{hasMatchSelection ? filteredMoments.length : 0} moments</Badge><Button className="h-10" variant="primary" disabled={!playableFiltered.length || videoLoading} onClick={() => playAll()}><Play size={15} />Play all</Button></div> : null}
     </Panel>
 
-    {viewMode === "compare" ? <ComparisonView matchA={matchA} matchB={matchB} pointsA={comparisonA} pointsB={comparisonB} momentsA={comparisonMomentsA} momentsB={comparisonMomentsB} coordinateMode={coordinateMode} period={period} momentTypes={settings?.momentTypes || []} submomentTypes={availableSubmomentTypes} /> : <>
+    {viewMode === "compare" ? <div className="space-y-5">
+      {comparisonScope === "two" ? <ComparisonView matchA={matchA} matchB={matchB} pointsA={comparisonA} pointsB={comparisonB} momentsA={comparisonMomentsA} momentsB={comparisonMomentsB} coordinateMode={coordinateMode} period={period} momentTypes={settings?.momentTypes || []} submomentTypes={availableSubmomentTypes} /> : <Panel className="border-cyan-300/20 p-4 text-sm text-cyan-100">The spatial side-by-side view is available for two games. The evolution analysis below includes all {eligibleComparisonMatches.length} filtered games.</Panel>}
+      <CompareGamesAnalysis matchIds={comparisonMatchIds} settings={settings} momentTypeId={momentTypeId} submomentTypeId={submomentTypeId} period={period}/>
+    </div> : <>
       {unassignedCount > 0 ? <p className="text-xs text-amber-200">{unassignedCount} occurrences are hidden until the match-period markers are configured.</p> : null}
       {hasMatchSelection && filteredMoments.length > 0 && mappedOccurrenceCount === 0 ? <Panel className="border-cyan-300/20 px-4 py-3 text-xs text-cyan-100">{filteredMoments.length} marked moments were found. They can be played and compared, but no points appear on the pitch because these moments do not yet have submoments with coordinates.</Panel> : null}
       <div ref={workspaceRef} data-video-workspace className="maps-surfaces grid grid-cols-[minmax(0,1.35fr)_minmax(0,.65fr)] items-start gap-2 sm:gap-5">
@@ -290,5 +323,6 @@ function rateLabel(count: number, minutes: number) { return minutes > 0 ? `${(co
 function Stat({ label, value, detail }: { label: string; value: string | number; detail: string }) { return <div className="rounded-lg border border-white/10 bg-white/[.025] p-3"><p className="text-xl font-bold text-white">{value}</p><p className="text-xs text-slate-300">{label}</p><p className="mt-1 text-[10px] text-slate-500">{detail}</p></div>; }
 
 function VideoPanel({ selectedPoint, sourceUrl, videoLoading, videoNotice, selectedClipStart, selectedClipEnd, currentTime, videoDuration, videoRef, workspaceRef, matches, onUseLocal, onLoaded, onTimeUpdate, onSeek }: { selectedPoint: MapPoint | null; sourceUrl: string | null; videoLoading: boolean; videoNotice: string | null; selectedClipStart: number; selectedClipEnd: number; currentTime: number; videoDuration: number; videoRef: React.RefObject<HTMLVideoElement | null>; workspaceRef: React.RefObject<HTMLDivElement | null>; matches: MatchSummary[]; onUseLocal: () => void; onLoaded: (video: HTMLVideoElement) => void; onTimeUpdate: (video: HTMLVideoElement) => void; onSeek: (seconds: number) => void }) {
-  return <Panel className="overflow-hidden"><div className="border-b border-white/10 p-2 sm:p-3"><Label>Selected moment video</Label>{selectedPoint ? <p className="mt-1 truncate text-[10px] text-slate-500 sm:text-xs">{selectedPoint.matchTitle} · {selectedPoint.momentTypeName} / {selectedPoint.subMomentTypeName} · {formatTime(selectedClipStart)}–{formatTime(selectedClipEnd)}</p> : null}</div><div className="relative aspect-video bg-black">{sourceUrl && selectedPoint ? <video key={`${sourceUrl}-${selectedPoint.id}`} ref={videoRef} src={sourceUrl} crossOrigin="anonymous" controls playsInline className="h-full w-full object-contain" onLoadedMetadata={(event) => onLoaded(event.currentTarget)} onTimeUpdate={(event) => onTimeUpdate(event.currentTarget)} /> : <div className="flex h-full flex-col items-center justify-center p-2 text-center sm:p-5"><FileVideo className="text-leaf-400" size={28} />{videoLoading ? <p className="mt-2 text-xs text-slate-400">Loading video…</p> : selectedPoint ? <><p className="mt-2 text-[10px] text-slate-400 sm:text-xs">{videoNotice || "Upload this match video from the analysis page."}</p>{matches.find((item) => item.id === selectedPoint.matchId)?.video?.storageStatus !== "READY" ? <Button className="mt-2" size="sm" onClick={onUseLocal}><Upload size={13} />Use local file</Button> : null}</> : <p className="mt-2 text-[10px] text-slate-500 sm:text-xs">Select a point on the pitch or goal.</p>}</div>}</div>{selectedPoint && sourceUrl ? <div className="border-t border-white/10 p-2"><input aria-label="Moment position" type="range" min={selectedClipStart} max={Math.min(videoDuration || selectedClipEnd, selectedClipEnd)} step={.1} value={Math.max(selectedClipStart, Math.min(currentTime, selectedClipEnd))} onChange={(event) => onSeek(Number(event.target.value))} className="h-1.5 w-full cursor-pointer accent-cyan-300"/><div className="mt-1 flex items-center justify-end gap-1"><span className="mr-auto font-mono text-[10px] text-slate-400">{formatTime(currentTime)} / {formatTime(selectedClipEnd)}</span><Button size="icon" className="h-7 w-7" title="Back 5 seconds (left arrow)" onClick={() => onSeek(currentTime - 5)}><RotateCcw size={13}/></Button><Button size="icon" className="h-7 w-7" title="Forward 5 seconds (right arrow)" onClick={() => onSeek(currentTime + 5)}><ChevronsRight size={13}/></Button><VideoFullscreenButton targetRef={workspaceRef}/></div></div> : null}</Panel>;
+  const { soundEnabled, setSoundEnabled } = useSoundPreference();
+  return <Panel className="overflow-hidden"><div className="border-b border-white/10 p-2 sm:p-3"><Label>Selected moment video</Label>{selectedPoint ? <p className="mt-1 truncate text-[10px] text-slate-500 sm:text-xs">{selectedPoint.matchTitle} · {selectedPoint.momentTypeName} / {selectedPoint.subMomentTypeName} · {formatTime(selectedClipStart)}–{formatTime(selectedClipEnd)}</p> : null}</div><div className="relative aspect-video bg-black">{sourceUrl && selectedPoint ? <video key={`${sourceUrl}-${selectedPoint.id}`} ref={videoRef} src={sourceUrl} crossOrigin="anonymous" controls muted={!soundEnabled} onVolumeChange={(e) => { const enabled = !e.currentTarget.muted; if (enabled !== soundEnabled) setSoundEnabled(enabled); }} playsInline className="h-full w-full object-contain" onLoadedMetadata={(event) => onLoaded(event.currentTarget)} onTimeUpdate={(event) => onTimeUpdate(event.currentTarget)} /> : <div className="flex h-full flex-col items-center justify-center p-2 text-center sm:p-5"><FileVideo className="text-leaf-400" size={28} />{videoLoading ? <p className="mt-2 text-xs text-slate-400">Loading video…</p> : selectedPoint ? <><p className="mt-2 text-[10px] text-slate-400 sm:text-xs">{videoNotice || "Upload this match video from the analysis page."}</p>{matches.find((item) => item.id === selectedPoint.matchId)?.video?.storageStatus !== "READY" ? <Button className="mt-2" size="sm" onClick={onUseLocal}><Upload size={13} />Use local file</Button> : null}</> : <p className="mt-2 text-[10px] text-slate-500 sm:text-xs">Select a point on the pitch or goal.</p>}</div>}</div>{selectedPoint && sourceUrl ? <div className="border-t border-white/10 p-2"><input aria-label="Moment position" type="range" min={selectedClipStart} max={Math.min(videoDuration || selectedClipEnd, selectedClipEnd)} step={.1} value={Math.max(selectedClipStart, Math.min(currentTime, selectedClipEnd))} onChange={(event) => onSeek(Number(event.target.value))} className="h-1.5 w-full cursor-pointer accent-cyan-300"/><div className="mt-1 flex items-center justify-end gap-1"><span className="mr-auto font-mono text-[10px] text-slate-400">{formatTime(currentTime)} / {formatTime(selectedClipEnd)}</span><Button size="icon" className="h-7 w-7" title="Back 5 seconds (left arrow)" onClick={() => onSeek(currentTime - 5)}><RotateCcw size={13}/></Button><Button size="icon" className="h-7 w-7" title="Forward 5 seconds (right arrow)" onClick={() => onSeek(currentTime + 5)}><ChevronsRight size={13}/></Button><VideoAudioToggle soundEnabled={soundEnabled} onChange={setSoundEnabled}/><VideoFullscreenButton targetRef={workspaceRef}/></div></div> : null}</Panel>;
 }

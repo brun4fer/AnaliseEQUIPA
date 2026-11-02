@@ -62,8 +62,11 @@ video { background: #020808; }
 
 .reports-video-workspace:fullscreen {
   height: 100vh !important;
-  grid-template-columns: minmax(0, 1fr) 22rem;
+  min-height: 0 !important;
+  grid-template-columns: minmax(0, 1fr) min(22rem, 38vw);
+  grid-template-rows: minmax(0, 1fr);
   align-items: stretch;
+  overflow: hidden;
 }
 
 .reports-video-workspace:fullscreen .reports-video-panel,
@@ -79,7 +82,7 @@ video { background: #020808; }
 
 @media (max-width: 899px) {
   .reports-video-workspace:fullscreen {
-    display: block;
+    display: grid;
   }
 
   .reports-video-workspace:fullscreen .reports-video-panel {
@@ -87,6 +90,17 @@ video { background: #020808; }
   }
 
   .reports-video-workspace:fullscreen .reports-clip-list {
-    display: none;
+    display: flex;
+    flex-direction: column;
   }
+}
+
+.reports-video-workspace:fullscreen .reports-clip-list > div:last-child {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+}
+
+.reports-video-workspace:fullscreen .reports-video-panel {
+  height: 100%;
 }

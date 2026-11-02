@@ -9,20 +9,31 @@ import {
   Input,
   Mp4OutputFormat,
   Output,
+  StreamTarget,
   UrlSource,
   type EncodedPacket,
   type InputAudioTrack,
   type InputVideoTrack,
+  type StreamTargetChunk,
 } from "mediabunny";
 
-import type { MatchDetail, MomentRecord } from "@/lib/domain";
+import { scoreAtTime, matchClockSeconds } from "@/lib/scoreboard";
+
+import type { MatchDetail, MatchScoreEventRecord, MomentRecord } from "@/lib/domain";
 import {
   buildClipFileName,
   exportMomentClip as exportMomentClipLegacy,
   type ExportQuality,
 } from "@/lib/video-export";
 
-type MatchForExport = Pick<MatchDetail, "title" | "opponentName" | "competition">;
+type MatchForExport = Pick<MatchDetail,
+  "title" | "teamName" | "opponentName" | "competition" |
+  "firstHalfStartSeconds" | "firstHalfEndSeconds" | "secondHalfStartSeconds" | "secondHalfEndSeconds" |
+  "homeClubName" | "homeClubShortName" | "homeClubLogoDataUrl" | "homeTeamColor" |
+  "awayClubName" | "awayClubShortName" | "awayClubLogoDataUrl" | "awayTeamColor"
+> & { scoreEvents?: MatchScoreEventRecord[] };
+
+type ScoreboardLogos = [HTMLImageElement | null, HTMLImageElement | null];
 
 export type SmartExportMode = "direct" | "webcodecs" | "compatibility";
 
@@ -39,11 +50,28 @@ type ExportMomentInput = {
   quality?: ExportQuality;
   onStatus?: (status: string) => void;
   sourceUrlFallback?: string;
+  includeAudio?: boolean;
+  includeScoreboard?: boolean;
 };
+
+type ExportFullMatchInput = {
+  match: MatchDetail;
+  quality?: ExportQuality;
+  includeAudio?: boolean;
+  includeScoreboard?: boolean;
+  onStatus?: (status: string) => void;
+  writable?: FileSystemWritableFileStream | null;
+};
+
+export type SmartFullMatchExportResult = Omit<SmartExportResult, "blob"> & { blob: Blob | null };
 
 // Only remux when the saved mark is effectively on the keyframe. Otherwise an
 // exact WebCodecs trim is safer than silently moving a football event boundary.
 const DIRECT_CUT_TOLERANCE_SECONDS = 0.04;
+const WEBCODECS_STALL_TIMEOUT_MS = 45_000;
+const WEBCODECS_CANCEL_GRACE_MS = 5_000;
+const WEBCODECS_MIN_TOTAL_TIMEOUT_MS = 90_000;
+const WEBCODECS_MAX_TOTAL_TIMEOUT_MS = 5 * 60_000;
 
 const transcodeSettings: Record<ExportQuality, { videoBitrate: number; audioBitrate: number }> = {
   original: { videoBitrate: 30_000_000, audioBitrate: 256_000 },
@@ -52,16 +80,22 @@ const transcodeSettings: Record<ExportQuality, { videoBitrate: number; audioBitr
 };
 
 export class SmartVideoExportSession {
+  private readonly source: File | string;
   private readonly input: Input;
   private videoTrackPromise: Promise<InputVideoTrack | null> | null = null;
   private audioTrackPromise: Promise<InputAudioTrack | null> | null = null;
 
   constructor(source: File | string) {
-    this.input = new Input({
+    this.source = source;
+    this.input = this.createInput();
+  }
+
+  private createInput() {
+    return new Input({
       formats: ALL_FORMATS,
-      source: typeof source === "string"
-        ? new UrlSource(source, { maxCacheSize: 64 * 1024 * 1024, parallelism: 2 })
-        : new BlobSource(source),
+      source: typeof this.source === "string"
+        ? new UrlSource(this.source, { maxCacheSize: 64 * 1024 * 1024, parallelism: 2 })
+        : new BlobSource(this.source),
     });
   }
 
@@ -82,24 +116,37 @@ export class SmartVideoExportSession {
     quality = "high",
     onStatus,
     sourceUrlFallback,
+    includeAudio = false,
+    includeScoreboard = false,
   }: ExportMomentInput): Promise<SmartExportResult> {
     await this.validate();
 
-    onStatus?.("Checking whether the clip can be copied without re-encoding...");
-    try {
-      const direct = await this.tryDirectExport(match, moment, onStatus);
-      if (direct) {
-        return direct;
+    if (!includeScoreboard) {
+      onStatus?.("Checking whether the clip can be copied without re-encoding...");
+      try {
+        const direct = await this.tryDirectExport(match, moment, onStatus, includeAudio);
+        if (direct) {
+          return direct;
+        }
+      } catch (error) {
+        console.info("Direct video export was not possible. Trying WebCodecs.", error);
       }
-    } catch (error) {
-      console.info("Direct video export was not possible. Trying WebCodecs.", error);
     }
 
     onStatus?.("Encoding an exact cut with WebCodecs...");
     try {
-      return await this.exportWithWebCodecs(match, moment, quality, onStatus);
+      return await this.exportWithWebCodecs(match, moment, quality, onStatus, "no-preference", includeAudio, includeScoreboard);
     } catch (error) {
+      if (error instanceof WebCodecsStallError) {
+        onStatus?.("The exact exporter stopped responding. Retrying with software encoding...");
+        try {
+          return await this.exportWithWebCodecs(match, moment, quality, onStatus, "prefer-software", includeAudio, includeScoreboard);
+        } catch (retryError) {
+          console.info("The software WebCodecs retry was not possible. Trying compatibility mode.", retryError);
+        }
+      }
       console.info("WebCodecs export was not possible. Trying compatibility mode.", error);
+      if (includeScoreboard) throw normalizeExportError(error);
       if (!sourceUrlFallback) {
         throw normalizeExportError(error);
       }
@@ -112,8 +159,61 @@ export class SmartVideoExportSession {
       moment,
       quality,
       onStatus,
+      includeAudio,
     });
     return { ...legacy, mode: "compatibility" };
+  }
+
+  async exportFullMatch({ match, quality = "standard", includeAudio = false, includeScoreboard = true, onStatus, writable = null }: ExportFullMatchInput): Promise<SmartFullMatchExportResult> {
+    await this.validate();
+    if (typeof VideoEncoder === "undefined" || typeof VideoDecoder === "undefined") throw new Error("Full match export requires a recent version of Chrome or Edge.");
+    const conversionInput = this.createInput();
+    let canvas: HTMLCanvasElement | null = null;
+    let context: CanvasRenderingContext2D | null = null;
+    const logos = includeScoreboard ? await loadScoreboardLogos(match) : null;
+    try {
+      const target = writable
+        ? new StreamTarget(writable as unknown as WritableStream<StreamTargetChunk>, { chunked: true })
+        : new BufferTarget();
+      const output = new Output({ format: new Mp4OutputFormat({ fastStart: writable ? false : "in-memory" }), target });
+      const settings = transcodeSettings[quality];
+      const conversion = await Conversion.init({
+        input: conversionInput,
+        output,
+        tracks: "primary",
+        video: {
+          codec: "avc",
+          bitrate: settings.videoBitrate,
+          keyFrameInterval: 2,
+          hardwareAcceleration: "no-preference",
+          forceTranscode: true,
+          process: includeScoreboard ? (sample) => {
+            if (!canvas) {
+              canvas = document.createElement("canvas");
+              canvas.width = sample.displayWidth;
+              canvas.height = sample.displayHeight;
+              context = canvas.getContext("2d");
+            }
+            if (!canvas || !context) throw new Error("Could not prepare the scoreboard overlay.");
+            sample.draw(context, 0, 0, canvas.width, canvas.height);
+            drawBroadcastOverlay(context, canvas.width, canvas.height, match, sample.timestamp, logos);
+            return canvas;
+          } : undefined,
+        },
+        audio: includeAudio ? { codec: "aac", bitrate: settings.audioBitrate } : { discard: true },
+        showWarnings: false,
+      });
+      if (!conversion.isValid) throw new Error("This video cannot be exported with the selected options in this browser.");
+      await executeLongConversion(conversion, (progress) => onStatus?.(`Exporting full match: ${Math.min(100, Math.round(progress * 100))}%`));
+      const fileName = `${sanitizeFileName(match.title) || "match"}${includeScoreboard ? "-scoreboard" : ""}.mp4`;
+      if (target instanceof BufferTarget) {
+        if (!target.buffer?.byteLength) throw new Error("The full match export finished without video data.");
+        return { blob: new Blob([target.buffer], { type: "video/mp4" }), fileName, mimeType: "video/mp4", mode: "webcodecs" };
+      }
+      return { blob: null, fileName, mimeType: "video/mp4", mode: "webcodecs" };
+    } finally {
+      conversionInput.dispose();
+    }
   }
 
   dispose() {
@@ -134,11 +234,12 @@ export class SmartVideoExportSession {
     match: MatchForExport,
     moment: MomentRecord,
     onStatus?: (status: string) => void,
+    includeAudio = false,
   ): Promise<SmartExportResult | null> {
     const videoTrack = await this.getVideoTrack();
     if (!videoTrack) return null;
 
-    const audioTrack = await this.getAudioTrack();
+    const audioTrack = includeAudio ? await this.getAudioTrack() : null;
     const format = new Mp4OutputFormat({ fastStart: "in-memory" });
     const videoCodec = await videoTrack.getCodec();
     const audioCodec = await audioTrack?.getCodec();
@@ -237,55 +338,140 @@ export class SmartVideoExportSession {
     moment: MomentRecord,
     quality: ExportQuality,
     onStatus?: (status: string) => void,
+    hardwareAcceleration: HardwareAcceleration = "no-preference",
+    includeAudio = false,
+    includeScoreboard = false,
   ): Promise<SmartExportResult> {
     if (typeof VideoEncoder === "undefined" || typeof VideoDecoder === "undefined") {
       throw new Error("WebCodecs is not available in this browser.");
     }
 
-    const target = new BufferTarget();
-    const output = new Output({ format: new Mp4OutputFormat({ fastStart: "in-memory" }), target });
-    const settings = transcodeSettings[quality];
-    const start = Math.max(0, moment.startTimeSeconds);
-    const end = Math.max(start + 0.1, moment.endTimeSeconds);
-    const conversion = await Conversion.init({
-      input: this.input,
-      output,
-      tracks: "primary",
-      trim: { start, end },
-      video: {
-        codec: "avc",
-        bitrate: settings.videoBitrate,
-        keyFrameInterval: 2,
-        hardwareAcceleration: "no-preference",
-      },
-      audio: {
-        codec: "aac",
-        bitrate: settings.audioBitrate,
-      },
-      showWarnings: false,
-    });
+    // A fresh input isolates every exact cut. This prevents a stalled browser
+    // decoder/encoder from poisoning the remaining clips in a large batch.
+    const conversionInput = this.createInput();
+    let canvas: HTMLCanvasElement | null = null;
+    let context: CanvasRenderingContext2D | null = null;
+    const logos = includeScoreboard ? await loadScoreboardLogos(match) : null;
+    try {
+      const target = new BufferTarget();
+      const output = new Output({ format: new Mp4OutputFormat({ fastStart: "in-memory" }), target });
+      const settings = transcodeSettings[quality];
+      const start = Math.max(0, moment.startTimeSeconds);
+      const end = Math.max(start + 0.1, moment.endTimeSeconds);
+      const conversion = await Conversion.init({
+        input: conversionInput,
+        output,
+        tracks: "primary",
+        trim: { start, end },
+        video: {
+          codec: "avc",
+          bitrate: settings.videoBitrate,
+          keyFrameInterval: 2,
+          hardwareAcceleration,
+          process: includeScoreboard ? (sample) => {
+            if (!canvas) {
+              canvas = document.createElement("canvas");
+              canvas.width = sample.displayWidth;
+              canvas.height = sample.displayHeight;
+              context = canvas.getContext("2d");
+            }
+            if (!canvas || !context) throw new Error("Could not prepare the scoreboard overlay.");
+            sample.draw(context, 0, 0, canvas.width, canvas.height);
+            drawBroadcastOverlay(context, canvas.width, canvas.height, { ...match, scoreEvents: match.scoreEvents || [] }, sample.timestamp + start, logos);
+            return canvas;
+          } : undefined,
+        },
+        audio: includeAudio ? { codec: "aac", bitrate: settings.audioBitrate } : { discard: true },
+        showWarnings: false,
+      });
 
-    if (!conversion.isValid) {
-      const reasons = [...new Set(conversion.discardedTracks.map((item) => item.reason))].join(", ");
-      throw new Error(`WebCodecs cannot export this video${reasons ? ` (${reasons})` : ""}.`);
+      if (!conversion.isValid) {
+        const reasons = [...new Set(conversion.discardedTracks.map((item) => item.reason))].join(", ");
+        throw new Error(`WebCodecs cannot export this video${reasons ? ` (${reasons})` : ""}.`);
+      }
+
+      await executeConversionWithWatchdog(conversion, end - start, (progress) => {
+        onStatus?.(`Exact cut with WebCodecs: ${Math.min(100, Math.round(progress * 100))}%`);
+      });
+
+      if (!target.buffer || target.buffer.byteLength === 0) {
+        throw new Error("WebCodecs finished without video data.");
+      }
+
+      return {
+        blob: new Blob([target.buffer], { type: "video/mp4" }),
+        fileName: buildClipFileName(match, moment, "mp4"),
+        mimeType: "video/mp4",
+        mode: "webcodecs",
+      };
+    } finally {
+      conversionInput.dispose();
     }
-
-    conversion.onProgress = (progress) => {
-      onStatus?.(`Exact cut with WebCodecs: ${Math.min(100, Math.round(progress * 100))}%`);
-    };
-    await conversion.execute();
-
-    if (!target.buffer || target.buffer.byteLength === 0) {
-      throw new Error("WebCodecs finished without video data.");
-    }
-
-    return {
-      blob: new Blob([target.buffer], { type: "video/mp4" }),
-      fileName: buildClipFileName(match, moment, "mp4"),
-      mimeType: "video/mp4",
-      mode: "webcodecs",
-    };
   }
+}
+
+class WebCodecsStallError extends Error {
+  constructor() {
+    super("WebCodecs stopped making progress.");
+    this.name = "WebCodecsStallError";
+  }
+}
+
+async function executeConversionWithWatchdog(
+  conversion: Conversion,
+  clipDurationSeconds: number,
+  onProgress: (progress: number) => void,
+) {
+  let stallTimeout: ReturnType<typeof setTimeout> | null = null;
+  let totalTimeout: ReturnType<typeof setTimeout> | null = null;
+  let rejectStall: ((error: Error) => void) | null = null;
+  let lastVisiblePercent = -1;
+
+  const stalled = new Promise<never>((_, reject) => {
+    rejectStall = reject;
+  });
+  const armWatchdog = () => {
+    if (stallTimeout) clearTimeout(stallTimeout);
+    stallTimeout = setTimeout(() => rejectStall?.(new WebCodecsStallError()), WEBCODECS_STALL_TIMEOUT_MS);
+  };
+
+  conversion.onProgress = (progress) => {
+    const visiblePercent = Math.min(100, Math.round(progress * 100));
+    // Tiny internal timestamp changes can keep firing while the percentage the
+    // user sees remains frozen. Only visible progress extends the stall timer.
+    if (visiblePercent > lastVisiblePercent) {
+      lastVisiblePercent = visiblePercent;
+      armWatchdog();
+    }
+    onProgress(progress);
+  };
+  armWatchdog();
+  const totalTimeoutMs = Math.min(
+    WEBCODECS_MAX_TOTAL_TIMEOUT_MS,
+    Math.max(WEBCODECS_MIN_TOTAL_TIMEOUT_MS, Math.ceil(clipDurationSeconds * 8_000)),
+  );
+  totalTimeout = setTimeout(() => rejectStall?.(new WebCodecsStallError()), totalTimeoutMs);
+
+  const execution = conversion.execute();
+  try {
+    await Promise.race([execution, stalled]);
+  } catch (error) {
+    // Do not let a browser encoder that stopped responding block the full
+    // export. Give Mediabunny a short window to release its resources.
+    await Promise.race([
+      conversion.cancel().catch(() => undefined),
+      wait(WEBCODECS_CANCEL_GRACE_MS),
+    ]);
+    void execution.catch(() => undefined);
+    throw error;
+  } finally {
+    if (stallTimeout) clearTimeout(stallTimeout);
+    if (totalTimeout) clearTimeout(totalTimeout);
+  }
+}
+
+function wait(milliseconds: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 }
 
 type PacketCopyInput = {
@@ -345,3 +531,77 @@ function normalizeExportError(error: unknown) {
   if (error instanceof Error) return error;
   return new Error("Could not export the video with the new engine.");
 }
+
+async function executeLongConversion(conversion: Conversion, onProgress: (progress: number) => void) {
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+  let rejectStall: ((error: Error) => void) | null = null;
+  const stalled = new Promise<never>((_, reject) => { rejectStall = reject; });
+  const arm = () => { if (timeout) clearTimeout(timeout); timeout = setTimeout(() => rejectStall?.(new WebCodecsStallError()), WEBCODECS_STALL_TIMEOUT_MS); };
+  conversion.onProgress = (progress) => { arm(); onProgress(progress); };
+  arm();
+  const execution = conversion.execute();
+  try { await Promise.race([execution, stalled]); }
+  catch (error) { await conversion.cancel().catch(() => undefined); void execution.catch(() => undefined); throw error; }
+  finally { if (timeout) clearTimeout(timeout); }
+}
+
+function drawBroadcastOverlay(context: CanvasRenderingContext2D, width: number, height: number, match: MatchForExport & { scoreEvents: MatchScoreEventRecord[] }, time: number, logos: ScoreboardLogos | null) {
+  const scale = Math.max(.42, (width / 1920) * .72);
+  const clockWidth = Math.round(90 * scale); const teamWidth = Math.round(112 * scale); const scoreWidth = Math.round(88 * scale); const panelHeight = Math.round(42 * scale); const margin = Math.round(12 * scale); const panelWidth = clockWidth + teamWidth * 2 + scoreWidth;
+  const x = width - panelWidth - margin; const y = margin; const score = scoreAtTime(match.scoreEvents, time); const middleY = y + panelHeight / 2;
+  const teams = [scoreboardOverlayCode(match.homeClubShortName || match.homeClubName || match.teamName || "HOME"), scoreboardOverlayCode(match.awayClubShortName || match.awayClubName || match.opponentName || "AWAY")];
+  const colors = [match.homeTeamColor, match.awayTeamColor]; const redCards = [score.homeRedCards, score.awayRedCards];
+  context.save(); context.textBaseline = "middle";
+  context.fillStyle = "#ffffff"; context.fillRect(x, y, clockWidth, panelHeight);
+  const clock = Math.floor(matchClockSeconds(match, time)); context.fillStyle = "#0f172a"; context.font = `900 ${Math.round(18 * scale)}px ui-monospace, monospace`; context.textAlign = "center"; context.fillText(`${String(Math.floor(clock / 60)).padStart(2, "0")}:${String(clock % 60).padStart(2, "0")}`, x + clockWidth / 2, middleY);
+  for (let index = 0; index < 2; index += 1) {
+    const teamX = x + clockWidth + (index === 0 ? 0 : teamWidth + scoreWidth); const cardW = Math.max(2, Math.round(7 * scale)); const cardH = Math.max(4, Math.round(14 * scale)); const cardGap = Math.max(1, Math.round(3 * scale));
+    for (let cardIndex = 0; cardIndex < redCards[index]; cardIndex += 1) { context.fillStyle = "#ef4444"; context.fillRect(teamX + Math.round(12 * scale) + cardIndex * (cardW + cardGap), y - cardH / 2, cardW, cardH); }
+    context.fillStyle = colors[index]; context.fillRect(teamX, y, teamWidth, panelHeight);
+    const emblemSize = Math.round(22 * scale); const emblemX = teamX + Math.round(10 * scale); drawTeamEmblem(context, logos?.[index] || null, teams[index], colors[index], emblemX, middleY - emblemSize / 2, emblemSize);
+    const teamTextX = emblemX + emblemSize + Math.round(7 * scale); context.fillStyle = readableOverlayTextColor(colors[index]); context.font = `800 ${Math.round(18 * scale)}px system-ui, sans-serif`; context.textAlign = "left"; context.fillText(teams[index], teamTextX, middleY);
+  }
+  const scoreX = x + clockWidth + teamWidth; context.fillStyle = "#f2f4e8"; context.fillRect(scoreX, y, scoreWidth, panelHeight); context.fillStyle = "#17221b"; context.font = `900 ${Math.round(22 * scale)}px system-ui, sans-serif`; context.textAlign = "center"; context.fillText(`${score.homeScore}  -  ${score.awayScore}`, scoreX + scoreWidth / 2, middleY);
+  context.strokeStyle = "rgba(0,0,0,.28)"; context.lineWidth = Math.max(1, Math.round(scale)); context.strokeRect(x, y, panelWidth, panelHeight); context.restore();
+}
+
+async function loadScoreboardLogos(match: MatchForExport): Promise<ScoreboardLogos> {
+  return Promise.all([loadScoreboardLogo(match.homeClubLogoDataUrl), loadScoreboardLogo(match.awayClubLogoDataUrl)]) as Promise<ScoreboardLogos>;
+}
+
+function loadScoreboardLogo(source: string | null) {
+  if (!source) return Promise.resolve(null);
+  return new Promise<HTMLImageElement | null>((resolve) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => resolve(null);
+    image.src = source;
+  });
+}
+
+function drawTeamEmblem(context: CanvasRenderingContext2D, image: HTMLImageElement | null, fallback: string, fallbackColor: string, x: number, y: number, size: number) {
+  const radius = size / 2;
+  context.save();
+  context.beginPath(); context.arc(x + radius, y + radius, radius, 0, Math.PI * 2); context.clip();
+  context.fillStyle = image ? "#ffffff" : fallbackColor; context.fillRect(x, y, size, size);
+  if (image) context.drawImage(image, x + 1, y + 1, size - 2, size - 2);
+  else { context.fillStyle = readableOverlayTextColor(fallbackColor); context.font = `900 ${Math.max(5, Math.round(size * .35))}px system-ui, sans-serif`; context.textAlign = "center"; context.textBaseline = "middle"; context.fillText(fallback.slice(0, 2), x + radius, y + radius); }
+  context.restore();
+  context.strokeStyle = "rgba(0,0,0,.28)"; context.lineWidth = Math.max(1, Math.round(size / 14)); context.beginPath(); context.arc(x + radius, y + radius, radius, 0, Math.PI * 2); context.stroke();
+}
+
+function readableOverlayTextColor(color: string) {
+  const hex = color.replace("#", "");
+  if (!/^[0-9A-Fa-f]{6}$/.test(hex)) return "#ffffff";
+  const red = Number.parseInt(hex.slice(0, 2), 16); const green = Number.parseInt(hex.slice(2, 4), 16); const blue = Number.parseInt(hex.slice(4, 6), 16);
+  return red * .299 + green * .587 + blue * .114 > 160 ? "#111827" : "#ffffff";
+}
+
+function scoreboardOverlayCode(value: string) {
+  const normalized = value.trim().toUpperCase();
+  if (normalized.length <= 4) return normalized;
+  const initials = normalized.split(/\s+/).filter(Boolean).map((part) => part[0]).join("");
+  return (initials.length >= 2 ? initials : normalized).slice(0, 4);
+}
+
+function sanitizeFileName(value: string) { return value.replace(/[<>:"/\\|?*\u0000-\u001F]/g, "-").trim(); }

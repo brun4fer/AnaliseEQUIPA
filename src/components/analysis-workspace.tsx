@@ -1,16 +1,21 @@
 "use client";
 
 import Link from "next/link";
+import { BroadcastScoreboard } from "@/components/broadcast-scoreboard";
+import { ScoreboardSettings } from "@/components/scoreboard-settings";
+import { OutcomeButtons } from "@/components/outcome-buttons";
+import { useSoundPreference, VideoAudioToggle } from "@/components/video-audio-toggle";
+import type { BroadcastState } from "@/lib/scoreboard";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Archive, ArrowLeft, Check, ChevronsLeft, ChevronsRight, Clock3, Cloud, FileVideo, Loader2, Pause, Pencil, Play, RotateCcw, Settings2, SlidersHorizontal, Trash2, Upload, X } from "lucide-react";
+import { Archive, ArrowLeft, ChevronsLeft, ChevronsRight, Clock3, Cloud, FileVideo, Loader2, Pause, Pencil, Play, RotateCcw, Settings2, SlidersHorizontal, Trash2, Upload, X } from "lucide-react";
 
 import { CloudVideoLibrary } from "@/components/cloud-video-library";
 import { MatchEditDialog } from "@/components/match-edit-dialog";
 import { MomentEditDialog } from "@/components/moment-edit-dialog";
 import { Badge, Button, Label, Panel, Select } from "@/components/ui";
 import { useVideoKeyboardSeek, VideoFullscreenButton } from "@/components/video-controls";
-import type { AccountPayload, MatchDetail, MomentRecord, MomentTypeRecord, SettingsPayload } from "@/lib/domain";
+import type { AccountPayload, MatchDetail, MatchScoreEventRecord, MomentRecord, MomentTypeRecord, SettingsPayload } from "@/lib/domain";
 import { isExportPickerCancellation, pickExportDirectory, writeBlobToDirectory } from "@/lib/export-directory";
 import { apiFetch } from "@/lib/http";
 import { getRememberedMatchVideo, rememberMatchVideo } from "@/lib/local-video-store";
@@ -39,6 +44,11 @@ const periodStyles = [
 
 export function AnalysisWorkspace({ matchId }: { matchId: string }) {
   const router = useRouter();
+  const { soundEnabled, setSoundEnabled } = useSoundPreference();
+  const [exportAudio, setExportAudio] = useState(false);
+  const [includeScoreboard, setIncludeScoreboard] = useState(true);
+  const [showScoreboardSettings, setShowScoreboardSettings] = useState(false);
+  const [scoreSaving, setScoreSaving] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const workspaceRef = useRef<HTMLDivElement | null>(null);
@@ -407,6 +417,8 @@ export function AnalysisWorkspace({ matchId }: { matchId: string }) {
           match,
           moment,
           quality: exportQuality,
+          includeAudio: exportAudio,
+          includeScoreboard: includeScoreboard && match.scoreboardEnabled,
           sourceUrlFallback: exportUrl,
           onStatus: (message) => setExportStatus(`${current} of ${moments.length}: ${message}`)
         });
@@ -453,6 +465,35 @@ export function AnalysisWorkspace({ matchId }: { matchId: string }) {
     }
   }
 
+  async function saveScore(score: BroadcastState) {
+    if (!match || scoreSaving) return;
+    setScoreSaving(true);
+    try {
+      const saved = await apiFetch<MatchScoreEventRecord>(`/api/matches/${matchId}/score-events`, { method: "POST", body: JSON.stringify({ ...score, timeSeconds: roundTime(currentTime) }) });
+      setMatch((current) => current ? { ...current, scoreEvents: [...current.scoreEvents, saved] } : current);
+    } catch (error) { setNotice(error instanceof Error ? error.message : "Could not save score."); }
+    finally { setScoreSaving(false); }
+  }
+  async function undoScore() {
+    if (!match || scoreSaving) return;
+    const latest = [...match.scoreEvents].sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+    if (!latest) return;
+    setScoreSaving(true);
+    try {
+      await apiFetch(`/api/matches/${matchId}/score-events`, { method: "DELETE", body: JSON.stringify({ eventId: latest.id }) });
+      setMatch((current) => current ? { ...current, scoreEvents: current.scoreEvents.filter((event) => event.id !== latest.id) } : current);
+    } catch (error) { setNotice(error instanceof Error ? error.message : "Could not undo score."); }
+    finally { setScoreSaving(false); }
+  }
+  async function saveScoreColor(team: "home" | "away", color: string) {
+    setScoreSaving(true);
+    try {
+      const saved = await apiFetch<MatchDetail>(`/api/matches/${matchId}`, { method: "PATCH", body: JSON.stringify({ [`${team}TeamColor`]: color }) });
+      setMatch((current) => current ? { ...current, homeTeamColor: saved.homeTeamColor, awayTeamColor: saved.awayTeamColor } : current);
+    } catch (error) { setNotice(error instanceof Error ? error.message : "Could not save color."); }
+    finally { setScoreSaving(false); }
+  }
+
   if (loading) return <div className="flex min-h-[65vh] items-center justify-center text-slate-400"><Loader2 className="mr-2 animate-spin" />Preparing analysis…</div>;
   if (!match || !settings) return <Panel className="border-red-400/20 p-5 text-red-100">{notice || "Could not open this match."}</Panel>;
 
@@ -479,7 +520,7 @@ export function AnalysisWorkspace({ matchId }: { matchId: string }) {
 
     <div ref={workspaceRef} data-video-workspace className="grid min-h-0 flex-1 items-stretch gap-2 xl:grid-cols-[18rem_minmax(0,1fr)]">
       <Panel className="order-2 flex min-h-0 min-w-0 flex-col overflow-hidden">
-        <div className="relative aspect-video min-h-72 shrink-0 bg-black xl:aspect-auto xl:min-h-0 xl:flex-1">{sourceUrl ? <video ref={videoRef} src={sourceUrl} crossOrigin="anonymous" className="h-full w-full object-contain" controls={false} playsInline onLoadedMetadata={(event) => { setDuration(event.currentTarget.duration); event.currentTarget.playbackRate = playbackRate; }} onTimeUpdate={(event) => { const video = event.currentTarget; setCurrentTime(video.currentTime); if (previewEnd !== null && video.currentTime >= previewEnd - .04) { video.pause(); video.currentTime = previewEnd; setPreviewEnd(null); } }} onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onEnded={() => setPlaying(false)} /> : <div className="flex h-full min-h-72 flex-col items-center justify-center p-6 text-center"><FileVideo size={56} className="text-cyan-200" /><h2 className="mt-4 text-xl font-semibold text-white">{restoringVideo ? "Loading the match video…" : match.video?.storageStatus === "LOCAL" ? "Upload the existing match video" : "Upload the match video"}</h2><p className="mt-2 max-w-lg text-sm leading-6 text-slate-400">The video will be stored privately in Cloudflare R2 and will be available on every device signed into this account.</p>{match.video ? <div className="mt-4 w-full max-w-lg rounded-md border border-cyan-300/25 bg-cyan-300/[.07] p-3 text-left"><p className="text-[10px] font-medium uppercase tracking-[.18em] text-cyan-200/70">Expected video</p><p className="mt-1 truncate text-sm font-medium text-cyan-50">{match.video.fileName}</p><p className="mt-1 text-xs text-slate-400">{formatBytes(match.video.fileSize)} · {formatTime(match.video.durationSeconds)}</p></div> : null}<div className="mt-5 flex flex-wrap justify-center gap-2"><Button variant="primary" onClick={() => fileInputRef.current?.click()}><Upload size={16} />Upload new</Button><Button variant="secondary" onClick={() => void openCloudLibrary()}><Cloud size={16} />Cloud library</Button></div></div>}{uploading ? <div className="absolute inset-x-0 bottom-0 h-1 bg-white/10"><div className="h-full bg-cyan-300 transition-[width]" style={{ width: `${Math.round(uploadProgress * 100)}%` }} /></div> : null}</div>
+        <div className="relative aspect-video min-h-72 shrink-0 bg-black xl:aspect-auto xl:min-h-0 xl:flex-1">{sourceUrl ? <video ref={videoRef} src={sourceUrl} crossOrigin="anonymous" className="h-full w-full object-contain" muted={!soundEnabled} controls={false} playsInline onLoadedMetadata={(event) => { setDuration(event.currentTarget.duration); event.currentTarget.playbackRate = playbackRate; }} onTimeUpdate={(event) => { const video = event.currentTarget; setCurrentTime(video.currentTime); if (previewEnd !== null && video.currentTime >= previewEnd - .04) { video.pause(); video.currentTime = previewEnd; setPreviewEnd(null); } }} onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onEnded={() => setPlaying(false)} /> : <div className="flex h-full min-h-72 flex-col items-center justify-center p-6 text-center"><FileVideo size={56} className="text-cyan-200" /><h2 className="mt-4 text-xl font-semibold text-white">{restoringVideo ? "Loading the match video…" : match.video?.storageStatus === "LOCAL" ? "Upload the existing match video" : "Upload the match video"}</h2><p className="mt-2 max-w-lg text-sm leading-6 text-slate-400">The video will be stored privately in Cloudflare R2 and will be available on every device signed into this account.</p>{match.video ? <div className="mt-4 w-full max-w-lg rounded-md border border-cyan-300/25 bg-cyan-300/[.07] p-3 text-left"><p className="text-[10px] font-medium uppercase tracking-[.18em] text-cyan-200/70">Expected video</p><p className="mt-1 truncate text-sm font-medium text-cyan-50">{match.video.fileName}</p><p className="mt-1 text-xs text-slate-400">{formatBytes(match.video.fileSize)} · {formatTime(match.video.durationSeconds)}</p></div> : null}<div className="mt-5 flex flex-wrap justify-center gap-2"><Button variant="primary" onClick={() => fileInputRef.current?.click()}><Upload size={16} />Upload new</Button><Button variant="secondary" onClick={() => void openCloudLibrary()}><Cloud size={16} />Cloud library</Button></div></div>}<BroadcastScoreboard match={match} currentTime={currentTime} editable saving={scoreSaving} onChange={(score) => void saveScore(score)} onUndo={() => void undoScore()} onTeamColorChange={(team, color) => void saveScoreColor(team, color)}/>{uploading ? <div className="absolute inset-x-0 bottom-0 h-1 bg-white/10"><div className="h-full bg-cyan-300 transition-[width]" style={{ width: `${Math.round(uploadProgress * 100)}%` }} /></div> : null}</div>
         <div className="shrink-0 border-t border-white/10 bg-pitch-950/90 p-2">
           <input aria-label="Video position" type="range" min={0} max={Math.max(duration, .1)} step={.1} value={Math.min(currentTime, duration || 0)} disabled={!sourceUrl || !duration} onChange={(event) => seekTo(Number(event.target.value))} className="h-1.5 w-full cursor-pointer accent-cyan-300 disabled:cursor-not-allowed disabled:opacity-40" style={{ background: duration ? `linear-gradient(to right, #67e8f9 ${(currentTime / duration) * 100}%, rgba(255,255,255,.14) ${(currentTime / duration) * 100}%)` : undefined }} />
           <div className="mt-1.5 flex items-center gap-2">
@@ -496,7 +537,7 @@ export function AnalysisWorkspace({ matchId }: { matchId: string }) {
               </div>
               <form className="ml-1 flex items-center gap-1 border-l border-white/10 pl-2" onSubmit={(event) => { event.preventDefault(); goToExactTime(); }}><input aria-label="Exact second" className="h-8 w-20 rounded-md border border-white/10 bg-black/20 px-2 font-mono text-[10px] text-white outline-none placeholder:text-slate-600 focus:border-cyan-300/50" type="number" min="0" max={duration || undefined} step="0.1" placeholder="Second" value={seekTime} onChange={(event) => setSeekTime(event.target.value)} disabled={!sourceUrl} /><Button type="submit" size="sm" className="h-8 px-2 text-[10px]" variant="secondary" disabled={!sourceUrl || seekTime === ""}>Go</Button></form>
             </div></div>
-            <div className="flex shrink-0 items-center gap-2"><span className="hidden items-center gap-1 font-mono text-xs text-white sm:inline-flex"><Clock3 size={13} className="text-cyan-200" />{formatTime(currentTime)} / {formatTime(duration)}</span><VideoFullscreenButton targetRef={workspaceRef}/><Link href={`/analysis/${matchId}/submoments`}><Button size="sm" variant="primary" className="h-8 whitespace-nowrap px-2 text-[10px]" disabled={match.moments.length === 0 || activeMoments.length > 0}>Identify submoments <ChevronsRight size={13} /></Button></Link></div>
+            <div className="flex shrink-0 items-center gap-2"><span className="hidden items-center gap-1 font-mono text-xs text-white sm:inline-flex"><Clock3 size={13} className="text-cyan-200" />{formatTime(currentTime)} / {formatTime(duration)}</span><VideoAudioToggle soundEnabled={soundEnabled} onChange={setSoundEnabled}/><Button size="sm" onClick={() => setShowScoreboardSettings(true)}>Scoreboard</Button><VideoFullscreenButton targetRef={workspaceRef}/><Link href={`/analysis/${matchId}/submoments`}><Button size="sm" variant="primary" className="h-8 whitespace-nowrap px-2 text-[10px]" disabled={match.moments.length === 0 || activeMoments.length > 0}>Identify submoments <ChevronsRight size={13} /></Button></Link></div>
           </div>
         </div>
       </Panel>
@@ -504,19 +545,21 @@ export function AnalysisWorkspace({ matchId }: { matchId: string }) {
       <Panel className="order-1 flex min-h-48 flex-col overflow-hidden xl:min-h-0">
         <div className="shrink-0 border-b border-white/10 px-3 py-2">
           <div className="flex items-center justify-between gap-2"><div><p className="text-xs uppercase tracking-[0.2em] text-slate-500">Tagged moments</p><p className="text-[10px] text-slate-400">{match.moments.length} in the video</p></div><div className="flex gap-1"><Button size="icon" variant="secondary" className="h-8 w-8" title="Export options" aria-label="Export options" aria-expanded={showExportOptions} onClick={() => setShowExportOptions((value) => !value)}><SlidersHorizontal size={13}/></Button><Button size="sm" variant="secondary" className="h-8 shrink-0 px-2" disabled={match.moments.length === 0 || exporting} title={exporting ? exportStatus : "Export all tagged moments"} onClick={() => void exportAllMoments()}>{exporting ? <Loader2 size={14} className="animate-spin" /> : <Archive size={14} />}{exporting ? "Exporting" : "Export all"}</Button></div></div>
-          {showExportOptions ? <div className="mt-2 grid gap-2 rounded-md border border-white/10 bg-black/15 p-2"><label className="grid gap-1"><Label className="text-[9px]">Quality</Label><Select className="h-8 py-0 text-[10px]" value={exportQuality} onChange={(event) => setExportQuality(event.target.value as ExportQuality)}>{exportQualityOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</Select></label><label className="grid gap-1"><Label className="text-[9px]">Organisation</Label><Select className="h-8 py-0 text-[10px]" value={exportLayout} onChange={(event) => setExportLayout(event.target.value as "grouped" | "individual")}><option value="grouped">Grouped by moment/submoment</option><option value="individual">Individual clips in one folder</option></Select></label></div> : null}
+          <div className="flex shrink-0 flex-wrap gap-4 px-2 text-xs text-slate-300"><span>Export options:</span><label className="flex items-center gap-2"><input type="checkbox" checked={exportAudio} onChange={(e) => setExportAudio(e.target.checked)}/>Include sound</label><label className="flex items-center gap-2"><input type="checkbox" checked={includeScoreboard} onChange={(e) => setIncludeScoreboard(e.target.checked)}/>Include scoreboard when enabled for this match</label></div>
+    {showExportOptions ? <div className="mt-2 grid gap-2 rounded-md border border-white/10 bg-black/15 p-2"><label className="grid gap-1"><Label className="text-[9px]">Quality</Label><Select className="h-8 py-0 text-[10px]" value={exportQuality} onChange={(event) => setExportQuality(event.target.value as ExportQuality)}>{exportQualityOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</Select></label><label className="grid gap-1"><Label className="text-[9px]">Organisation</Label><Select className="h-8 py-0 text-[10px]" value={exportLayout} onChange={(event) => setExportLayout(event.target.value as "grouped" | "individual")}><option value="grouped">Grouped by moment/submoment</option><option value="individual">Individual clips in one folder</option></Select></label></div> : null}
           {exporting && exportStatus ? <p className="mt-2 text-[10px] leading-4 text-cyan-100">{exportStatus}</p> : null}
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto">{match.moments.length === 0 ? <p className="p-3 text-xs leading-5 text-slate-500">Completed moments appear here.</p> : match.moments.map((moment, index) => <div key={moment.id} className={`flex h-8 w-full items-center gap-1 border-b border-white/[.06] px-2 text-left transition hover:bg-white/[.06] ${selectedMomentId === moment.id ? "bg-cyan-300/10 text-cyan-100" : ""}`}><button type="button" className="flex min-w-0 flex-1 items-center gap-1.5" onClick={() => reviewMoment(moment)} title={`${moment.momentType.name} · ${formatTime(moment.startTimeSeconds)}–${formatTime(moment.endTimeSeconds)}`}><span className="w-6 shrink-0 text-right font-mono text-[9px] text-slate-500">#{index + 1}</span><span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: moment.momentType.color }} /><span className="min-w-0 flex-1 truncate font-mono text-[9px] text-slate-300">{formatTime(moment.startTimeSeconds)}–{formatTime(moment.endTimeSeconds)}</span><Badge className="shrink-0 px-1 py-0 text-[8px]">{moment.subMoments.length} sub.</Badge></button><button title="Mark as positive" aria-label="Mark as positive" onClick={() => void toggleOutcome(moment, "positive")} className={`flex h-6 w-6 shrink-0 items-center justify-center rounded border transition ${moment.outcome === "positive" ? "border-emerald-300 bg-emerald-400 text-emerald-950" : "border-emerald-400/25 bg-emerald-400/10 text-emerald-300"}`}><Check size={11} /></button><button title="Mark as negative" aria-label="Mark as negative" onClick={() => void toggleOutcome(moment, "negative")} className={`flex h-6 w-6 shrink-0 items-center justify-center rounded border transition ${moment.outcome === "negative" ? "border-red-300 bg-red-400 text-red-950" : "border-red-400/25 bg-red-400/10 text-red-300"}`}><X size={11} /></button><button type="button" title="Edit clip" className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-cyan-300/25 bg-cyan-300/10 text-cyan-100 hover:bg-cyan-300/20" onClick={() => setEditingMoment(moment)} aria-label="Edit clip"><Pencil size={11} /></button><button type="button" title="Delete clip" className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-red-400/30 bg-red-500/10 text-red-100 hover:bg-red-500/25" onClick={() => void removeMoment(moment)} aria-label="Delete clip"><Trash2 size={11} /></button></div>)}</div>
+        <div className="min-h-0 flex-1 overflow-y-auto">{match.moments.length === 0 ? <p className="p-3 text-xs leading-5 text-slate-500">Completed moments appear here.</p> : match.moments.map((moment, index) => <div key={moment.id} className={`flex h-8 w-full items-center gap-1 border-b border-white/[.06] px-2 text-left transition hover:bg-white/[.06] ${selectedMomentId === moment.id ? "bg-cyan-300/10 text-cyan-100" : ""}`}><button type="button" className="flex min-w-0 flex-1 items-center gap-1.5" onClick={() => reviewMoment(moment)} title={`${moment.momentType.name} · ${formatTime(moment.startTimeSeconds)}–${formatTime(moment.endTimeSeconds)}`}><span className="w-6 shrink-0 text-right font-mono text-[9px] text-slate-500">#{index + 1}</span><span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: moment.momentType.color }} /><span className="min-w-0 flex-1 truncate font-mono text-[9px] text-slate-300">{formatTime(moment.startTimeSeconds)}–{formatTime(moment.endTimeSeconds)}</span><Badge className="shrink-0 px-1 py-0 text-[8px]">{moment.subMoments.length} sub.</Badge></button><OutcomeButtons compact value={moment.outcome === "positive" || moment.outcome === "negative" ? moment.outcome : null} onChange={(outcome) => void toggleOutcome(moment, outcome)}/><button type="button" title="Edit clip" className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-cyan-300/25 bg-cyan-300/10 text-cyan-100 hover:bg-cyan-300/20" onClick={() => setEditingMoment(moment)} aria-label="Edit clip"><Pencil size={11} /></button><button type="button" title="Delete clip" className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-red-400/30 bg-red-500/10 text-red-100 hover:bg-red-500/25" onClick={() => void removeMoment(moment)} aria-label="Delete clip"><Trash2 size={11} /></button></div>)}</div>
       </Panel>
 
+    {showScoreboardSettings ? <ScoreboardSettings match={match} onClose={() => setShowScoreboardSettings(false)} onSaved={(saved) => { setMatch(saved); setShowScoreboardSettings(false); }}/> : null}
+    {editingMoment ? <MomentEditDialog moment={editingMoment} momentTypes={settings.momentTypes} duration={duration || match.video?.durationSeconds || 0} onSave={(input) => updateMoment(editingMoment, input)} onClose={() => setEditingMoment(null)} /> : null}
+    {editingMatch ? <MatchEditDialog match={match} onSave={saveMatch} onDelete={removeCurrentMatch} onClose={() => setEditingMatch(false)} /> : null}
+    {showCloudLibrary ? <CloudVideoLibrary assets={cloudAssets} loading={loadingCloudLibrary} error={cloudLibraryError} attachingAssetId={attachingAssetId} onRetry={() => void openCloudLibrary()} onClose={() => !attachingAssetId && setShowCloudLibrary(false)} onSelect={(asset) => void attachSelectedCloudVideo(asset)} /> : null}
     </div>
 
     <Timeline momentTypes={settings.momentTypes} moments={match.moments} duration={timelineDuration} selectedMomentId={selectedMomentId} onSelect={reviewMoment} />
 
-    {editingMoment ? <MomentEditDialog moment={editingMoment} momentTypes={settings.momentTypes} duration={duration || match.video?.durationSeconds || 0} onSave={(input) => updateMoment(editingMoment, input)} onClose={() => setEditingMoment(null)} /> : null}
-    {editingMatch ? <MatchEditDialog match={match} onSave={saveMatch} onDelete={removeCurrentMatch} onClose={() => setEditingMatch(false)} /> : null}
-    {showCloudLibrary ? <CloudVideoLibrary assets={cloudAssets} loading={loadingCloudLibrary} error={cloudLibraryError} attachingAssetId={attachingAssetId} onRetry={() => void openCloudLibrary()} onClose={() => !attachingAssetId && setShowCloudLibrary(false)} onSelect={(asset) => void attachSelectedCloudVideo(asset)} /> : null}
   </div>;
 }
 

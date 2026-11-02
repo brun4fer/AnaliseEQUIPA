@@ -7,6 +7,7 @@ type ExportMomentClipInput = {
   moment: MomentRecord;
   onStatus?: (status: string) => void;
   quality?: ExportQuality;
+  includeAudio?: boolean;
 };
 
 type ExportMomentClipResult = {
@@ -39,6 +40,7 @@ export async function exportMomentClip({
   moment,
   onStatus,
   quality = "high",
+  includeAudio = false,
 }: ExportMomentClipInput): Promise<ExportMomentClipResult> {
   if (typeof MediaRecorder === "undefined") {
     throw new Error("This browser does not support video export.");
@@ -54,6 +56,7 @@ export async function exportMomentClip({
   const sourceVideo = document.createElement("video");
   sourceVideo.preload = "auto";
   sourceVideo.playsInline = true;
+  sourceVideo.crossOrigin = "anonymous";
   sourceVideo.src = sourceUrl;
 
   let animationFrame = 0;
@@ -83,7 +86,7 @@ export async function exportMomentClip({
     }
 
     outputStream = canvas.captureStream(exportSettings.frameRate);
-    audioResources = await addAudioToStream(sourceVideo, outputStream);
+    audioResources = includeAudio ? await addAudioToStream(sourceVideo, outputStream) : null;
     if (!audioResources) {
       sourceVideo.muted = true;
     }

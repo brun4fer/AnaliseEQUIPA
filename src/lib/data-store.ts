@@ -9,9 +9,12 @@ import { abortMediaMultipartUpload } from "@/lib/media-r2";
 import { ensureMediaWorkspace } from "@/lib/media-workspace";
 import { abortMultipartUpload, deleteR2Object } from "@/lib/r2";
 import { serializeVideo } from "@/lib/video";
+import { validateScoreEvent, validateScoreboardSettings } from "@/lib/scoreboard";
 
 const matchInclude = {
   video: true,
+  workspace: { select: { name: true } },
+  scoreEvents: { orderBy: [{ timeSeconds: "asc" as const }, { createdAt: "asc" as const }] },
   moments: {
     include: {
       momentType: true,
@@ -26,6 +29,10 @@ function serializeMatch(match: Awaited<ReturnType<typeof prisma.match.findFirstO
   const moments = (match.moments as unknown[] | undefined) ?? [];
   return {
     ...match,
+    workspace: undefined,
+    teamName: (match.workspace as { name: string } | undefined)?.name ?? null,
+    homeClubName: match.homeClubName || (match.workspace as { name: string } | undefined)?.name || null,
+    awayClubName: match.awayClubName || match.opponentName,
     matchDate: match.matchDate instanceof Date ? match.matchDate.toISOString() : match.matchDate,
     video: video ? serializeVideo(video) : null,
     momentCount: moments.length,
@@ -121,6 +128,7 @@ export async function updateMatch(matchId: string, input: Record<string, unknown
   const nextMarkers = Object.fromEntries(markerKeys.map((key) => [key, data[key] === undefined ? current[key] : data[key]])) as Record<PeriodMarkerKey, number | null>;
   validatePeriodMarkers(nextMarkers);
   const updateData: Prisma.MatchUncheckedUpdateInput = { ...data };
+  Object.assign(updateData, validateScoreboardSettings(input));
 
   const selectionChanged = ["seasonId", "competitionId", "opponentClubId"].some((key) => input[key] !== undefined);
   if (selectionChanged) {
@@ -147,16 +155,31 @@ export async function updateMatch(matchId: string, input: Record<string, unknown
 
   const match = await prisma.$transaction(async (tx) => {
     await tx.match.update({ where: { id: matchId }, data: updateData });
-    await tx.moment.updateMany({ where: { matchId }, data: { period: null } });
-    if (nextMarkers.firstHalfStartSeconds !== null && nextMarkers.firstHalfEndSeconds !== null) {
-      await tx.moment.updateMany({ where: { matchId, startTimeSeconds: { gte: nextMarkers.firstHalfStartSeconds, lte: nextMarkers.firstHalfEndSeconds } }, data: { period: "first_half" } });
-    }
-    if (nextMarkers.secondHalfStartSeconds !== null && nextMarkers.secondHalfEndSeconds !== null) {
-      await tx.moment.updateMany({ where: { matchId, startTimeSeconds: { gte: nextMarkers.secondHalfStartSeconds, lte: nextMarkers.secondHalfEndSeconds } }, data: { period: "second_half" } });
+    if (markerKeys.some((key) => input[key] !== undefined)) {
+      await tx.moment.updateMany({ where: { matchId }, data: { period: null } });
+      if (nextMarkers.firstHalfStartSeconds !== null && nextMarkers.firstHalfEndSeconds !== null) {
+        await tx.moment.updateMany({ where: { matchId, startTimeSeconds: { gte: nextMarkers.firstHalfStartSeconds, lte: nextMarkers.firstHalfEndSeconds } }, data: { period: "first_half" } });
+      }
+      if (nextMarkers.secondHalfStartSeconds !== null && nextMarkers.secondHalfEndSeconds !== null) {
+        await tx.moment.updateMany({ where: { matchId, startTimeSeconds: { gte: nextMarkers.secondHalfStartSeconds, lte: nextMarkers.secondHalfEndSeconds } }, data: { period: "second_half" } });
+      }
     }
     return tx.match.findUniqueOrThrow({ where: { id: matchId }, include: matchInclude });
   });
   return serializeMatch(match as never);
+}
+
+export async function createMatchScoreEvent(matchId: string, input: Record<string, unknown>) {
+  const { workspace } = await requireWorkspace();
+  const match = await prisma.match.findFirstOrThrow({ where: { id: matchId, workspaceId: workspace.id }, include: { video: true } });
+  const data = validateScoreEvent(input, match.video?.durationSeconds);
+  return prisma.matchScoreEvent.create({ data: { matchId, ...data } });
+}
+
+export async function deleteMatchScoreEvent(matchId: string, eventId: string) {
+  const { workspace } = await requireWorkspace();
+  const event = await prisma.matchScoreEvent.findFirstOrThrow({ where: { id: eventId, matchId, match: { workspaceId: workspace.id } } });
+  await prisma.matchScoreEvent.delete({ where: { id: event.id } });
 }
 
 export async function deleteMatch(matchId: string) {
@@ -433,6 +456,8 @@ export async function saveMomentType(input: Record<string, unknown>, id?: string
 
 export async function saveSubMomentType(input: Record<string, unknown>, id?: string) {
   const { workspace } = await requireWorkspace();
+  const momentTypeId = optionalString(input.momentTypeId);
+  if (momentTypeId) await prisma.momentType.findFirstOrThrow({ where: { id: momentTypeId, workspaceId: workspace.id }, select: { id: true } });
   const data = {
     name: String(input.name || "").trim(),
     code: String(input.code || "").trim().toUpperCase(),
@@ -448,7 +473,7 @@ export async function saveSubMomentType(input: Record<string, unknown>, id?: str
     await prisma.subMomentType.findFirstOrThrow({ where: { id, workspaceId: workspace.id }, select: { id: true } });
     return prisma.subMomentType.update({ where: { id }, data });
   }
-  return prisma.subMomentType.create({ data: { ...data, workspaceId: workspace.id } });
+  return prisma.subMomentType.create({ data: { ...data, workspaceId: workspace.id, ...(momentTypeId ? { allowedForMoments: { connect: { id: momentTypeId } } } : {}) } });
 }
 
 export async function deleteMomentType(id: string) {

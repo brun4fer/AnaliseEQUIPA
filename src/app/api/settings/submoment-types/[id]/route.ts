@@ -3,7 +3,7 @@ import { deleteSubMomentType, saveSubMomentType } from "@/lib/data-store";
 import { requireAreaWorkspace } from "@/lib/auth";
 
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
-  try { await requireAreaWorkspace("settings"); return Response.json(await saveSubMomentType(await readJson<Record<string, unknown>>(request), (await context.params).id)); }
+  try { await requireAreaWorkspace(["settings", "analysis"]); return Response.json(await saveSubMomentType(await readJson<Record<string, unknown>>(request), (await context.params).id)); }
   catch (error) { return handleApiError(error); }
 }
 
